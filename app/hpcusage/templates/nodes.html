@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% from "_macros.html" import tile %}
+{% block title %}Nodes · {{ cluster.display_name }}{% endblock %}
+{% block head %}
+<div class="page-head"><h1>Nodes</h1><span class="sub">{{ cluster.display_name }} · snapshot {{ nodes.taken_at|ts }}</span></div>
+{% endblock %}
+{% block content %}
+{% set t = nodes.totals %}
+<div class="tiles">
+  {{ tile('Nodes', t.nodes|num, '', (t.down|num) ~ ' down/drained') }}
+  {{ tile('CPUs allocated', t.cpus_alloc|num, ' / ' ~ (t.cpus_total|num), ((t.cpus_alloc / t.cpus_total) if t.cpus_total else none)|pct ~ ' in use') }}
+  {{ tile('GPUs allocated', t.gpus_alloc|num, ' / ' ~ (t.gpus_total|num), ((t.gpus_alloc / t.gpus_total) if t.gpus_total else none)|pct ~ ' in use') }}
+  {{ tile('Memory allocated', t.mem_mb_alloc|mb, ' / ' ~ (t.mem_mb_total|mb)) }}
+</div>
+<div class="grid">
+  <div class="card col-4"><h2>Nodes by state</h2>
+    <table class="data"><tr><th>State</th><th class="num">Nodes</th></tr>
+    {% for s, n in nodes.by_state|dictsort(by='value', reverse=True) %}<tr><td>{{ s }}</td><td class="num">{{ n }}</td></tr>{% endfor %}</table></div>
+  <div class="card col-8"><h2>By partition <span class="hint">a node in several partitions counts in each</span></h2>
+    <table class="data"><tr><th>Partition</th><th class="num">Nodes</th><th class="num">Down</th><th class="num">CPUs</th><th class="num">In use</th><th class="num">GPUs</th><th class="num">In use</th><th class="num">Memory</th><th>Max time</th></tr>
+    {% for p in nodes.by_partition %}{% set info = (partition_info|selectattr('partition', 'equalto', p.partition)|list|first) %}
+    <tr><td><a href="/c/{{ cluster.name }}/partitions/{{ p.partition }}">{{ p.partition }}</a></td><td class="num">{{ p.nodes }}</td><td class="num">{{ p.down }}</td>
+      <td class="num">{{ p.cpus_total|num }}</td><td class="num">{{ ((p.cpus_alloc / p.cpus_total) if p.cpus_total else none)|pct }}</td>
+      <td class="num">{{ p.gpus_total|num }}</td><td class="num">{{ ((p.gpus_alloc / p.gpus_total) if p.gpus_total else none)|pct }}</td>
+      <td class="num">{{ p.mem_mb_total|mb }}</td><td class="muted">{{ info.max_time_s|duration if info else '–' }}</td></tr>
+    {% endfor %}</table></div>
+  <div class="card col-12"><h2>All nodes</h2>
+    <div class="scroll"><table class="data"><tr><th>Node</th><th>State</th><th class="num">CPUs</th><th class="num">Alloc</th><th class="num">Memory</th><th class="num">Alloc</th><th class="num">GPUs</th><th class="num">Alloc</th><th>Partitions</th><th>Features</th></tr>
+    {% for n in nodes.nodes %}
+    <tr><td class="mono">{{ n.node_name }}</td>
+      <td>{% if 'DOWN' in n.state or 'DRAIN' in n.state %}<span class="badge bad">{{ n.state }}</span>{% elif n.base_state in ('IDLE',) %}<span class="badge good">{{ n.state }}</span>{% else %}<span class="badge">{{ n.state }}</span>{% endif %}</td>
+      <td class="num">{{ n.cpus_total }}</td><td class="num">{{ n.cpus_alloc }}</td><td class="num">{{ n.mem_mb_total|mb }}</td><td class="num">{{ n.mem_mb_alloc|mb }}</td>
+      <td class="num">{{ n.gpus_total or '' }}{% if n.gpu_type %} <span class="muted">{{ n.gpu_type }}</span>{% endif %}</td><td class="num">{{ n.gpus_alloc or '' }}</td>
+      <td class="muted">{{ n.partitions|join(', ') }}</td><td class="muted">{{ (n.features or '')|replace('(null)', '') }}</td></tr>
+    {% else %}<tr><td colspan="10" class="muted">No node snapshot yet.</td></tr>{% endfor %}
+    </table></div></div>
+</div>
+{% endblock %}

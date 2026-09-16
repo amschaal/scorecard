@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install ruff
+      - run: ruff check app infra scripts
+
+  collector:
+    name: collector (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.12", "3.8"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "${{ matrix.python }}" }
+      - run: python -m unittest discover -s collector/tests -v
+
+  collector-py36:
+    # setup-python no longer ships 3.6; use the official image to prove login-node compatibility.
+    runs-on: ubuntu-latest
+    container: python:3.6-slim
+    steps:
+      - uses: actions/checkout@v4
+      - run: python -m unittest discover -s collector/tests -v
+
+  app:
+    runs-on: ubuntu-latest   # has Docker, needed by testcontainers
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -e ".[dev]"
+      - run: python -m pytest app/tests -q
+
+  cdk:
+    # A real `cdk synth` needs the VPC lookup (cached in infra/cdk.context.json after the first run
+    # against the account), so CI only checks that the stacks import against the pinned CDK version.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: pip install -r infra/requirements.txt
+      - run: cd infra && python -c "import stacks.hpcusage_stack, aws_cdk; print('cdk', aws_cdk.__version__)"

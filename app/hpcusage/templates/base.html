@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}hpcusage{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/plotly.min.js"></script>
+  <script>if (!window.Plotly) { document.write('<script src="https://cdn.plot.ly/plotly-2.35.2.min.js"><\/script>'); }</script>
+</head>
+<body>
+<header class="topbar">
+  <a class="brand" href="/">hpcusage</a>
+  <nav>
+    {% for c in clusters %}
+      <a href="/c/{{ c.name }}" class="{{ 'active' if cluster and cluster.name == c.name else '' }}">{{ c.display_name }}</a>
+    {% endfor %}
+    <a href="/admin/ingest" class="{{ 'active' if request.url.path == '/admin/ingest' else '' }}">Ingest</a>
+  </nav>
+  <span class="spacer"></span>
+  <button id="theme-toggle" class="btn small" type="button" title="Toggle light/dark">◐</button>
+  <span class="who">{{ display_name or user }} · <a href="/auth/logout">log out</a></span>
+</header>
+{% if cluster %}
+{% set base = '/c/' ~ cluster.name %}
+{% set qs = '?from=' ~ window.from ~ '&to=' ~ window.to %}
+<div class="subnav">
+  {% for path, label in [('', 'Overview'), ('/leaderboard', 'Leaderboard'), ('/utilization', 'Utilization & wait'),
+                         ('/efficiency', 'Efficiency'), ('/fairshare', 'Fairshare'), ('/jobs', 'Jobs'), ('/nodes', 'Nodes')] %}
+    <a href="{{ base }}{{ path }}{{ qs if path != '/nodes' else '' }}" class="{{ 'active' if request.url.path == base ~ path else '' }}">{{ label }}</a>
+  {% endfor %}
+</div>
+{% endif %}
+<main>
+  {% block head %}{% endblock %}
+  {% block window %}
+  {% if show_window is not defined or show_window %}
+  <div class="controls">
+    <form id="window-form" method="get">
+      {% for k, v in request.query_params.items() if k not in ('from', 'to') %}<input type="hidden" name="{{ k }}" value="{{ v }}">{% endfor %}
+      <span class="presets">
+        {% for d, label in [(7, '7d'), (30, '30d'), (90, '90d'), (365, '1y')] %}
+          <a href="#" data-days="{{ d }}" class="{{ 'active' if window.days == d else '' }}">{{ label }}</a>
+        {% endfor %}
+      </span>
+      <label>From <input type="date" name="from" value="{{ window.from }}"></label>
+      <label>To <input type="date" name="to" value="{{ window.to }}"></label>
+      <button class="btn" type="submit">Apply</button>
+    </form>
+    {% block controls %}{% endblock %}
+  </div>
+  {% endif %}
+  {% endblock %}
+  {% block content %}{% endblock %}
+</main>
+<footer>hpcusage {{ app_version }}{% if cluster %} · {{ cluster.display_name }} ({{ cluster.timezone }}){% endif %}</footer>
+<script src="/static/charts.js"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

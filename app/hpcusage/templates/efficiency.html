@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Efficiency · {{ cluster.display_name }}{% endblock %}
+{% block head %}
+<div class="page-head"><h1>Efficiency</h1><span class="sub">{{ cluster.display_name }} · {{ window.from }} → {{ window.to }} · who allocates a lot and uses little</span></div>
+{% endblock %}
+{% block controls %}
+<form method="get">
+  <input type="hidden" name="from" value="{{ window.from }}"><input type="hidden" name="to" value="{{ window.to }}">
+  <label>Group <select name="by"><option value="user" {{ 'selected' if by == 'user' }}>users</option><option value="account" {{ 'selected' if by == 'account' }}>accounts</option></select></label>
+  <label>Min CPU-hours <input type="number" name="min_cpu_hours" value="{{ min_cpu_hours|int }}" min="0" step="10"></label>
+  <label>Sort by <select name="sort">
+    {% for k, l in [('wasted_cpu_hours', 'wasted CPU-hours'), ('wasted_mem_gb_hours', 'wasted memory GB-h'), ('cpu_hours', 'CPU-hours'), ('cpu_eff', 'CPU efficiency'), ('mem_eff', 'memory efficiency'), ('time_eff', 'time-limit use'), ('timeout_rate', 'timeout rate')] %}
+    <option value="{{ k }}" {{ 'selected' if k == sort }}>{{ l }}</option>{% endfor %}</select></label>
+  <label>Partition <select name="partition"><option value="">all</option>{% for p in partitions %}<option value="{{ p }}" {{ 'selected' if p == partition }}>{{ p }}</option>{% endfor %}</select></label>
+  <button class="btn" type="submit">Go</button>
+</form>
+{% endblock %}
+{% block content %}
+<div class="grid">
+  <div class="card col-6"><h2>CPU efficiency vs. CPU-hours <span class="hint">bubble size = jobs; bottom-right is the naughty corner</span></h2><div class="chart" id="scatter"></div></div>
+  <div class="card col-6"><h2>Memory efficiency vs. memory GB-hours <span class="hint">MaxRSS / allocated; multi-node jobs approximate</span></h2><div class="chart" id="scatter-mem"></div></div>
+  <div class="card col-12"><h2>Ranking <span class="hint">CPU eff = TotalCPU / (elapsed × CPUs); wasted = hours × (1 − eff)</span></h2><div id="table"></div></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const P = { cluster: "{{ cluster.name }}", from: "{{ window.from }}", to: "{{ window.to }}", by: "{{ by }}", min_cpu_hours: "{{ min_cpu_hours }}", sort: "{{ sort }}", partition: "{{ partition }}", limit: 200 };
+const meter = (v, warn = 0.5, bad = 0.25, invert = false) => {
+  if (v == null) return '<span class="muted">–</span>';
+  const cls = invert ? (v > bad ? 'bad' : v > warn ? 'warn' : '') : (v < bad ? 'bad' : v < warn ? 'warn' : '');
+  return `<span class="meter ${cls}"><span class="track"><span class="fill" style="width:${Math.min(100, Math.round(100 * v))}%"></span></span><span class="v">${HU.fmt.pct(v)}</span></span>`;
+};
+(async () => {
+  const eff = await HU.getJSON('/api/v1/efficiency', P);
+  if (!eff) return;
+  const kind = eff.by === 'account' ? 'accounts' : 'users';
+  HU.onRender(() => {
+    HU.scatter(document.getElementById('scatter'), eff.items.filter(i => i.cpu_eff != null).map(i => ({name: i.name, x: i.cpu_hours, y: i.cpu_eff, size: i.jobs})), {xTitle: 'CPU-hours', yTitle: 'CPU efficiency', logX: true});
+    HU.scatter(document.getElementById('scatter-mem'), eff.items.filter(i => i.mem_eff != null && i.mem_gb_hours > 0).map(i => ({name: i.name, x: i.mem_gb_hours, y: i.mem_eff, size: i.jobs})), {xTitle: 'Memory GB-hours', yTitle: 'Memory efficiency', logX: true});
+  });
+  const rows = eff.items.map((i, n) => `<tr><td class="rank">${n + 1}</td><td>${HU.linkTo(kind, P.cluster, i.name)}</td>
+    <td class="num">${HU.fmt.num(i.cpu_hours)}</td><td class="num">${HU.fmt.num(i.gpu_hours)}</td><td class="num">${HU.fmt.num(i.jobs)}</td>
+    <td>${meter(i.cpu_eff)}</td><td>${meter(i.mem_eff)}</td><td>${meter(i.time_eff, 0.2, 0.05)}</td>
+    <td>${meter(i.timeout_rate, 0.1, 0.3, true)}</td><td>${meter(i.short_job_rate, 0.5, 0.8, true)}</td>
+    <td class="num"><b>${HU.fmt.num(i.wasted_cpu_hours)}</b></td><td class="num">${HU.fmt.num(i.wasted_mem_gb_hours)}</td></tr>`).join('');
+  document.getElementById('table').innerHTML = `<div class="scroll"><table class="data"><tr><th></th><th>${eff.by}</th><th class="num">CPU-h</th><th class="num">GPU-h</th><th class="num">Jobs</th>
+    <th>CPU eff</th><th>Mem eff</th><th>Time-limit use</th><th>Timeout rate</th><th>Short jobs</th><th class="num">Wasted CPU-h</th><th class="num">Wasted mem GB-h</th></tr>${rows || '<tr><td colspan="12" class="muted">Nobody above the threshold</td></tr>'}</table></div>`;
+})().catch(e => console.error(e));
+</script>
+{% endblock %}

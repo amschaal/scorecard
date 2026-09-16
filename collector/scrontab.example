@@ -1,0 +1,19 @@
+# hpcusage collector — install with:  scrontab -e   (or: scrontab scrontab.example)
+# Runs at 02:15 local time and collects the previous two full days of sacct
+# accounting (idempotent; each day is collected twice on purpose), plus a
+# node/partition capacity snapshot and a fairshare snapshot.
+#
+# Config lives in ~/.hpcusage/config.ini (see config.ini.example).
+
+#SCRON --job-name=hpcusage-collect
+#SCRON --time=01:00:00
+#SCRON --cpus-per-task=1
+#SCRON --mem=1G
+#SCRON --output=/home/%u/.hpcusage/collect-%j.log
+15 2 * * * /home/USERNAME/hpcusage/slurm_collector.py --all
+
+# Optional: a mid-day node snapshot for a more responsive "current state" view.
+#SCRON --job-name=hpcusage-nodes
+#SCRON --time=00:10:00
+#SCRON --output=/home/%u/.hpcusage/nodes-%j.log
+0 8,12,16,20 * * * /home/USERNAME/hpcusage/slurm_collector.py --nodes

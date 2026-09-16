@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% from "_macros.html" import jobs_table %}
+{% block title %}Jobs · {{ cluster.display_name }}{% endblock %}
+{% block head %}
+<div class="page-head"><h1>Jobs</h1><span class="sub">{{ cluster.display_name }} · {{ window.from }} → {{ window.to }} · {{ result.total|num }} matching (per-job rows are retained for a limited time)</span></div>
+{% endblock %}
+{% block controls %}
+<form method="get">
+  <input type="hidden" name="from" value="{{ window.from }}"><input type="hidden" name="to" value="{{ window.to }}">
+  <label>User <input type="text" name="user" value="{{ filters.user }}"></label>
+  <label>Account <input type="text" name="account" value="{{ filters.account }}"></label>
+  <label>Partition <select name="partition"><option value="">any</option>{% for p in partitions %}<option value="{{ p }}" {{ 'selected' if p == filters.partition }}>{{ p }}</option>{% endfor %}</select></label>
+  <label>State <select name="state"><option value="">any</option>{% for s in states %}<option value="{{ s }}" {{ 'selected' if s == filters.state }}>{{ s }}</option>{% endfor %}</select></label>
+  <label>Job ID <input type="text" name="job_id" value="{{ filters.job_id }}" style="min-width:90px"></label>
+  <label class="check"><input type="checkbox" name="gpus_only" value="true" {{ 'checked' if filters.gpus_only }}> GPU jobs</label>
+  <label>Sort <select name="sort">{% for k, l in [('end_time', 'end'), ('elapsed_s', 'elapsed'), ('cpu_seconds_alloc', 'CPU-seconds'), ('wait_s', 'wait'), ('max_rss_mb', 'MaxRSS'), ('alloc_cpus', 'CPUs')] %}<option value="{{ k }}" {{ 'selected' if k == sort }}>{{ l }}</option>{% endfor %}</select></label>
+  <button class="btn" type="submit">Filter</button>
+</form>
+{% endblock %}
+{% block content %}
+<div class="card">
+  {{ jobs_table(result['items'], cluster) }}
+  <div class="pager">
+    {% set q = request.query_params %}
+    {% set base_qs = [] %}{% for k, v in q.items() if k != 'page' %}{% set _ = base_qs.append(k ~ '=' ~ (v|urlencode)) %}{% endfor %}
+    {% set qs = base_qs|join('&') %}
+    {% if page > 1 %}<a class="btn small" href="?{{ qs }}&page={{ page - 1 }}">← newer</a>{% endif %}
+    <span>page {{ page }} of {{ pages }}</span>
+    {% if page < pages %}<a class="btn small" href="?{{ qs }}&page={{ page + 1 }}">older →</a>{% endif %}
+  </div>
+</div>
+{% endblock %}

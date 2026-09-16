@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% from "_macros.html" import meter %}
+{% block title %}Fairshare · {{ cluster.display_name }}{% endblock %}
+{% block head %}
+<div class="page-head"><h1>Fairshare</h1><span class="sub">{{ cluster.display_name }} · snapshot {{ latest.taken_at|ts }}</span></div>
+{% endblock %}
+{% block controls %}
+<form method="get">
+  <input type="hidden" name="from" value="{{ window.from }}"><input type="hidden" name="to" value="{{ window.to }}">
+  <label>Account <select name="account"><option value="">— choose for trend —</option>
+    {% for r in latest.rows if not r.user_name %}<option value="{{ r.account }}" {{ 'selected' if r.account == account }}>{{ r.account }}</option>{% endfor %}</select></label>
+  <label>User <input type="text" name="fs_user" value="{{ fs_user }}" placeholder="optional"></label>
+  <button class="btn" type="submit">Show trend</button>
+</form>
+{% endblock %}
+{% block content %}
+<div class="grid">
+  {% if account %}
+  <div class="card col-12"><h2>Trend for {{ account }}{% if fs_user %} / {{ fs_user }}{% endif %} <span class="hint">FairShare factor, normalized usage and normalized shares (0–1)</span></h2><div class="chart" id="trend"></div></div>
+  {% endif %}
+  <div class="card col-12"><h2>Current fairshare tree <span class="hint">from <code>sshare -a</code></span></h2>
+    <div class="scroll"><table class="data">
+      <tr><th>Account</th><th>User</th><th class="num">Raw shares</th><th class="num">Norm shares</th><th class="num">Raw usage</th><th class="num">Norm usage</th><th class="num">Effective usage</th><th>FairShare</th><th class="num">LevelFS</th></tr>
+      {% for r in latest.rows %}
+      <tr>
+        <td style="padding-left: {{ 8 + 14 * r.depth }}px">{% if not r.user_name %}<a href="/c/{{ cluster.name }}/fairshare?account={{ r.account }}&from={{ window.from }}&to={{ window.to }}"><b>{{ r.account }}</b></a>{% else %}<span class="muted">{{ r.account }}</span>{% endif %}</td>
+        <td>{% if r.user_name %}<a href="/c/{{ cluster.name }}/users/{{ r.user_name }}">{{ r.user_name }}</a>{% endif %}</td>
+        <td class="num">{{ 'parent' if r.shares_parent else r.raw_shares|num }}</td>
+        <td class="num">{{ r.norm_shares|num(4) }}</td>
+        <td class="num">{{ r.raw_usage|num }}</td>
+        <td class="num">{{ r.norm_usage|num(4) }}</td>
+        <td class="num">{{ r.effective_usage|num(4) }}</td>
+        <td>{{ meter(r.fairshare, warn=0.5, bad=0.2) }}</td>
+        <td class="num">{{ r.level_fs|num(2) }}</td>
+      </tr>
+      {% else %}<tr><td colspan="9" class="muted">No fairshare snapshot yet.</td></tr>{% endfor %}
+    </table></div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+{% if account %}
+<script>
+(async () => {
+  const s = await HU.getJSON('/api/v1/fairshare', {cluster: "{{ cluster.name }}", from: "{{ window.from }}", to: "{{ window.to }}", account: "{{ account }}", user: "{{ fs_user }}"});
+  if (!s) return;
+  HU.onRender(() => HU.lines(document.getElementById('trend'), s.t, [
+    {name: 'FairShare', values: s.fairshare}, {name: 'Norm usage', values: s.norm_usage}, {name: 'Norm shares', values: s.norm_shares},
+  ], {digits: 4, yRange: [0, 1.05]}));
+})().catch(e => console.error(e));
+</script>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Utilization · {{ cluster.display_name }}{% endblock %}
+{% block head %}
+<div class="page-head"><h1>Utilization &amp; queue wait</h1><span class="sub">{{ cluster.display_name }} · {{ window.from }} → {{ window.to }} · allocated resource-seconds split across the days a job ran, vs. node-snapshot capacity</span></div>
+{% endblock %}
+{% block controls %}
+<form method="get">
+  <input type="hidden" name="from" value="{{ window.from }}"><input type="hidden" name="to" value="{{ window.to }}">
+  <label>Resource <select name="resource">{% for k, l in [('cpu', 'CPU'), ('gpu', 'GPU'), ('mem', 'Memory'), ('node', 'Nodes')] %}<option value="{{ k }}" {{ 'selected' if k == resource }}>{{ l }}</option>{% endfor %}</select></label>
+  <label>Partition <select name="partition"><option value="">all</option>{% for p in partitions %}<option value="{{ p }}" {{ 'selected' if p == partition }}>{{ p }}</option>{% endfor %}</select></label>
+  <button class="btn" type="submit">Go</button>
+</form>
+{% endblock %}
+{% block content %}
+<div class="grid">
+  <div class="card col-8"><h2><span id="util-title">Utilization</span> <span class="hint">% of capacity, daily</span></h2><div class="chart" id="util"></div></div>
+  <div class="card col-4"><h2>Average over window</h2><div id="util-table"></div></div>
+  <div class="card col-6"><h2>Median queue wait <span class="hint">p50 of jobs started that day, hours</span></h2><div class="chart" id="wait-p50"></div></div>
+  <div class="card col-6"><h2>90th-percentile queue wait <span class="hint">hours</span></h2><div class="chart" id="wait-p90"></div></div>
+  <div class="card col-12"><h2>Wait-time distribution <span class="hint">jobs by time in queue, per partition (per-job rows only)</span></h2><div class="chart" id="wait-hist"></div></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const P = { cluster: "{{ cluster.name }}", from: "{{ window.from }}", to: "{{ window.to }}", partition: "{{ partition }}" };
+(async () => {
+  const [util, wait] = await Promise.all([
+    HU.getJSON('/api/v1/utilization', {...P, resource: "{{ resource }}"}),
+    HU.getJSON('/api/v1/wait_times', P),
+  ]);
+  if (!util) return;
+  document.getElementById('util-title').textContent = `${util.label} utilization`;
+  const series = util.series.slice(0, 8);
+  document.getElementById('util-table').innerHTML = `<table class="data"><tr><th>Partition</th><th class="num">Avg</th><th class="num">Used h</th><th class="num">Capacity h</th></tr>` +
+    util.series.map(s => `<tr><td>${HU.linkTo('partitions', P.cluster, s.name)}</td><td class="num">${s.avg_pct == null ? '<span class="muted">no snapshot</span>' : s.avg_pct.toFixed(1) + '%'}</td><td class="num">${HU.fmt.num(s.used_hours)}</td><td class="num">${HU.fmt.num(s.capacity_hours)}</td></tr>`).join('') + `</table>`;
+  const h = wait.histogram;
+  HU.onRender(() => {
+    HU.lines(document.getElementById('util'), util.days, series, {unit: '%', yTitle: '% of capacity', percent: true});
+    HU.lines(document.getElementById('wait-p50'), wait.days, wait.series.slice(0, 8).map(s => ({name: s.name, values: s.p50})), {unit: 'h', yTitle: 'hours', digits: 2});
+    HU.lines(document.getElementById('wait-p90'), wait.days, wait.series.slice(0, 8).map(s => ({name: s.name, values: s.p90})), {unit: 'h', yTitle: 'hours', digits: 2});
+    HU.stackedBars(document.getElementById('wait-hist'), h.buckets, h.series.slice(0, 8), {unit: 'jobs', yTitle: 'Jobs', digits: 0});
+  });
+})().catch(e => console.error(e));
+</script>
+{% endblock %}

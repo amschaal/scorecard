@@ -1,0 +1,18 @@
+# Development override (applied automatically by `docker compose`):
+#   * builds the `dev` image stage (pytest, ruff, ... installed)
+#   * bind-mounts the whole repo at /app so code, Makefile, collector/ and scripts/ are live
+#   * hot-reloads the server
+#   * points the in-container make targets at the compose services
+#       make seed      -> POSTs to http://app:8000
+#       make test-app  -> uses database hpcusage_test on the compose Postgres (created on first run)
+# Delete or rename this file for a production-like run.
+services:
+  app:
+    build:
+      target: dev
+    volumes:
+      - .:/app
+    environment:
+      HPCUSAGE_URL: http://app:8000
+      HPCUSAGE_TEST_DATABASE_URL: postgresql://hpcusage:hpcusage@db:5432/hpcusage_test
+    command: ["uvicorn", "hpcusage.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/app/app"]

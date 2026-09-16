@@ -1,0 +1,48 @@
+{% macro tile(label, value, unit='', sub='') -%}
+<div class="tile"><div class="label">{{ label }}</div><div class="value">{{ value }}{% if unit %}<small>{{ unit }}</small>{% endif %}</div>{% if sub %}<div class="sub">{{ sub }}</div>{% endif %}</div>
+{%- endmacro %}
+
+{% macro meter(v, warn=0.5, bad=0.25, invert=False) -%}
+{% if v is none %}<span class="muted">–</span>{% else %}
+{% set cls = '' %}
+{% if not invert %}{% if v < bad %}{% set cls = 'bad' %}{% elif v < warn %}{% set cls = 'warn' %}{% endif %}
+{% else %}{% if v > bad %}{% set cls = 'bad' %}{% elif v > warn %}{% set cls = 'warn' %}{% endif %}{% endif %}
+<span class="meter {{ cls }}" title="{{ v|pct(1) }}"><span class="track"><span class="fill" style="width: {{ [100, (100 * v)|round]|min }}%"></span></span><span class="v">{{ v|pct }}</span></span>
+{% endif %}
+{%- endmacro %}
+
+{% macro state_badge(state) -%}
+{% if state == 'COMPLETED' %}<span class="badge good">Completed</span>
+{% elif state in ('FAILED', 'OUT_OF_MEMORY', 'NODE_FAIL', 'BOOT_FAIL') %}<span class="badge bad">{{ state|replace('_', ' ')|capitalize }}</span>
+{% elif state in ('TIMEOUT', 'CANCELLED', 'PREEMPTED', 'DEADLINE') %}<span class="badge warn">{{ state|capitalize }}</span>
+{% else %}<span class="badge">{{ state }}</span>{% endif %}
+{%- endmacro %}
+
+{% macro jobs_table(jobs, cluster, show_user=True) -%}
+<div class="scroll"><table class="data">
+  <tr><th>Job</th>{% if show_user %}<th>User</th>{% endif %}<th>Account</th><th>Partition</th><th>Name</th><th>State</th>
+      <th>End</th><th class="num">Elapsed</th><th class="num">Wait</th><th class="num">CPUs</th><th class="num">GPUs</th>
+      <th class="num">Mem alloc</th><th>CPU eff</th><th>Mem eff</th><th>Time eff</th></tr>
+  {% for j in jobs %}
+  <tr>
+    <td class="mono">{{ j.job_id }}</td>
+    {% if show_user %}<td><a href="/c/{{ cluster.name }}/users/{{ j.user_name }}">{{ j.user_name }}</a></td>{% endif %}
+    <td><a href="/c/{{ cluster.name }}/accounts/{{ j.account }}">{{ j.account }}</a></td>
+    <td><a href="/c/{{ cluster.name }}/partitions/{{ j.partition }}">{{ j.partition }}</a></td>
+    <td class="muted">{{ (j.job_name or '')[:40] }}</td>
+    <td>{{ state_badge(j.state) }}</td>
+    <td class="muted">{{ j.end_time|ts }}</td>
+    <td class="num">{{ j.elapsed_s|duration }}</td>
+    <td class="num">{{ j.wait_s|duration }}</td>
+    <td class="num">{{ j.alloc_cpus }}{% if j.nnodes > 1 %}<span class="muted">/{{ j.nnodes }}n</span>{% endif %}</td>
+    <td class="num">{{ j.gpus or '' }}</td>
+    <td class="num">{{ j.alloc_mem_mb|mb }}</td>
+    <td>{{ meter(j.cpu_eff) }}</td>
+    <td>{{ meter(j.mem_eff) }}{% if j.mem_eff_approx and j.mem_eff is not none %}<span class="muted" title="multi-node: MaxRSS is per task">≈</span>{% endif %}</td>
+    <td>{{ meter(j.time_eff, warn=0.2, bad=0.05) }}</td>
+  </tr>
+  {% else %}
+  <tr><td colspan="15" class="muted">No jobs in this window (per-job rows are kept for a limited time; rollups are permanent).</td></tr>
+  {% endfor %}
+</table></div>
+{%- endmacro %}

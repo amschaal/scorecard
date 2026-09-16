@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}hpcusage · overview{% endblock %}
+{% block head %}
+<div class="page-head"><h1>Cluster usage overview</h1><span class="sub">{{ window.from }} → {{ window.to }}</span></div>
+{% endblock %}
+{% block content %}
+{% if not clusters %}
+<div class="notice">No clusters yet. Configure <code>COLLECTOR_TOKENS</code> and run the collector, or <code>make seed</code> locally.</div>
+{% endif %}
+<div class="grid">
+  {% for c in clusters %}{% set o = overview[c.name] %}
+  <div class="card col-4">
+    <h2><a href="/c/{{ c.name }}?from={{ window.from }}&to={{ window.to }}">{{ c.display_name }}</a>
+      <span class="hint">{% if o.last_day %}data through {{ o.last_day }}{% else %}no data{% endif %}</span></h2>
+    <div class="tiles" style="grid-template-columns: repeat(2, 1fr)">
+      <div class="tile"><div class="label">CPU-hours</div><div class="value">{{ o.cpu_hours|num }}</div></div>
+      <div class="tile"><div class="label">GPU-hours</div><div class="value">{{ o.gpu_hours|num }}</div></div>
+      <div class="tile"><div class="label">Jobs</div><div class="value">{{ o.jobs|num }}</div></div>
+      <div class="tile"><div class="label">Active users</div><div class="value">{{ o.users|num }}</div></div>
+    </div>
+    <div class="chart short" id="spark-{{ c.name }}" style="min-height:48px" data-x='{{ o.spark.x|tojson }}' data-y='{{ o.spark.y|tojson }}'></div>
+  </div>
+  {% endfor %}
+  <div class="card col-12">
+    <h2>Collector status <span class="hint">latest upload per cluster and kind</span></h2>
+    <table class="data">
+      <tr><th>Cluster</th><th>Kind</th><th>Received</th><th>Window / snapshot</th><th class="num">Rows</th><th>Status</th></tr>
+      {% for s in ingest %}
+      <tr>
+        <td>{{ s.cluster }}</td><td>{{ s.kind }}</td>
+        <td class="muted">{{ s.received_at|ts }} <span class="muted">({{ s.age_hours|num }} h ago)</span></td>
+        <td class="muted">{% if s.window_start %}{{ s.window_start|ts }} → {{ s.window_end|ts }}{% else %}{{ s.taken_at|ts }}{% endif %}</td>
+        <td class="num">{{ s.rows_received|num }}</td>
+        <td>{% if s.status != 'ok' %}<span class="badge bad">error</span>{% elif s.stale %}<span class="badge warn">stale</span>{% else %}<span class="badge good">ok</span>{% endif %}</td>
+      </tr>
+      {% else %}<tr><td colspan="6" class="muted">No uploads yet.</td></tr>{% endfor %}
+    </table>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+document.querySelectorAll('[id^="spark-"]').forEach(el => HU.onRender(() => HU.sparkline(el, JSON.parse(el.dataset.x), JSON.parse(el.dataset.y))));
+</script>
+{% endblock %}

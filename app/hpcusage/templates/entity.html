@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% from "_macros.html" import tile, jobs_table %}
+{% block title %}{{ entity }} · {{ cluster.display_name }}{% endblock %}
+{% block head %}
+<div class="page-head"><h1>{{ entity_type|capitalize }} <span class="mono" style="font-size:18px">{{ entity }}</span></h1>
+  <span class="sub">{{ cluster.display_name }} · {{ window.from }} → {{ window.to }}</span></div>
+{% endblock %}
+{% block content %}
+<div class="tiles">
+  {{ tile('CPU-hours', summary.cpu_hours|num) }}
+  {{ tile('GPU-hours', summary.gpu_hours|num) }}
+  {{ tile('Memory GB-hours', summary.mem_gb_hours|num) }}
+  {{ tile('Jobs', summary.jobs|num, '', summary.short_jobs|num ~ ' under 5 min') }}
+  {{ tile('Completed', summary.success_rate|pct, '', summary.timeout|num ~ ' timeouts · ' ~ summary.oom|num ~ ' OOM') }}
+  {{ tile('CPU efficiency', summary.cpu_eff|pct) }}
+  {{ tile('Memory efficiency', summary.mem_eff|pct, '', 'MaxRSS / allocated') }}
+  {{ tile('Time-limit use', summary.time_eff|pct, '', 'elapsed / limit') }}
+  {{ tile('Mean queue wait', summary.mean_wait_s|duration) }}
+</div>
+<div class="grid">
+  <div class="card col-8"><h2>CPU-hours by {{ 'user' if entity_type == 'partition' else 'partition' }} <span class="hint">daily</span></h2><div class="chart" id="ts"></div></div>
+  <div class="card col-4">
+    <h2>{% if entity_type == 'user' %}Accounts{% else %}Top users{% endif %} <span class="hint">by CPU-hours</span></h2>
+    <table class="data"><tr><th>{{ 'Account' if entity_type == 'user' else 'User' }}</th><th class="num">CPU-h</th><th class="num">Jobs</th></tr>
+    {% for m in (accounts if entity_type == 'user' else members) %}
+      <tr><td><a href="/c/{{ cluster.name }}/{{ 'accounts' if entity_type == 'user' else 'users' }}/{{ m.name }}?from={{ window.from }}&to={{ window.to }}">{{ m.name }}</a></td><td class="num">{{ m.cpu_hours|num }}</td><td class="num">{{ m.jobs|num }}</td></tr>
+    {% else %}<tr><td colspan="3" class="muted">none</td></tr>{% endfor %}
+    </table>
+  </div>
+  <div class="card col-6"><h2>Job outcomes <span class="hint">daily</span></h2><div class="chart" id="outcomes"></div></div>
+  <div class="card col-6"><h2>GPU-hours <span class="hint">daily</span></h2><div class="chart" id="gpu"></div></div>
+  <div class="card col-12"><h2>Recent jobs <span class="hint">latest 50 · <a href="/c/{{ cluster.name }}/jobs?from={{ window.from }}&to={{ window.to }}&{{ 'user' if entity_type == 'user' else entity_type }}={{ entity }}">browse all</a></span></h2>
+    {{ jobs_table(jobs['items'], cluster, show_user=(entity_type != 'user')) }}</div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const P = { cluster: "{{ cluster.name }}", from: "{{ window.from }}", to: "{{ window.to }}", {{ 'user' if entity_type == 'user' else entity_type }}: "{{ entity }}" };
+const groupBy = "{{ 'user' if entity_type == 'partition' else 'partition' }}";
+const outcomeColors = () => [HU.tok('--series-3'), HU.tok('--series-8'), HU.tok('--series-4'), HU.tok('--series-2'), HU.tok('--series-7'), HU.tok('--series-5'), HU.tok('--series-1')];
+(async () => {
+  const [ts, out, gpu] = await Promise.all([
+    HU.getJSON('/api/v1/usage/timeseries', {...P, metric: 'cpu_hours', group_by: groupBy, top_n: 8}),
+    HU.getJSON('/api/v1/outcomes', P),
+    HU.getJSON('/api/v1/usage/timeseries', {...P, metric: 'gpu_hours', group_by: groupBy, top_n: 8}),
+  ]);
+  if (!ts) return;
+  HU.onRender(() => {
+    HU.stackedBars(document.getElementById('ts'), ts.buckets, ts.series, {unit: 'CPU-h', yTitle: 'CPU-hours', digits: 0});
+    HU.stackedBars(document.getElementById('outcomes'), out.buckets, out.series.filter(s => s.values.some(v => v > 0)), {unit: 'jobs', yTitle: 'Jobs', digits: 0, colors: outcomeColors()});
+    HU.stackedBars(document.getElementById('gpu'), gpu.buckets, gpu.series, {unit: 'GPU-h', yTitle: 'GPU-hours', digits: 0});
+  });
+})().catch(e => console.error(e));
+</script>
+{% endblock %}

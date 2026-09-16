@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% from "_macros.html" import tile %}
+{% block title %}{{ cluster.display_name }} · hpcusage{% endblock %}
+{% block head %}
+<div class="page-head"><h1>{{ cluster.display_name }}</h1><span class="sub">{{ window.from }} → {{ window.to }} · jobs attributed to the day they ended</span></div>
+{% endblock %}
+{% block content %}
+<div class="tiles">
+  {{ tile('CPU-hours', summary.cpu_hours|num) }}
+  {{ tile('GPU-hours', summary.gpu_hours|num) }}
+  {{ tile('Memory GB-hours', summary.mem_gb_hours|num) }}
+  {{ tile('Jobs', summary.jobs|num, '', summary.short_jobs|num ~ ' under 5 min') }}
+  {{ tile('Active users', summary.users|num, '', summary.accounts|num ~ ' accounts') }}
+  {{ tile('Completed', summary.success_rate|pct, '', summary.timeout|num ~ ' timeouts · ' ~ summary.oom|num ~ ' OOM') }}
+  {{ tile('CPU efficiency', summary.cpu_eff|pct, '', 'used / allocated') }}
+  {{ tile('Mean queue wait', summary.mean_wait_s|duration) }}
+</div>
+<div class="grid">
+  <div class="card col-8"><h2>CPU-hours by partition <span class="hint">daily</span></h2><div class="chart" id="cpu-by-part"></div></div>
+  <div class="card col-4"><h2>Top users by CPU-hours</h2><div class="chart" id="top-users"></div></div>
+  <div class="card col-8"><h2>GPU-hours by partition <span class="hint">daily</span></h2><div class="chart" id="gpu-by-part"></div></div>
+  <div class="card col-4"><h2>Top accounts by CPU-hours</h2><div class="chart" id="top-accounts"></div></div>
+  <div class="card col-6"><h2>Job outcomes <span class="hint">daily</span></h2><div class="chart" id="outcomes"></div></div>
+  <div class="card col-6"><h2>CPU utilization <span class="hint">% of partition capacity, from node snapshots</span></h2><div class="chart" id="util"></div></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const P = { cluster: "{{ cluster.name }}", from: "{{ window.from }}", to: "{{ window.to }}" };
+const outcomeColors = () => [HU.tok('--series-3'), HU.tok('--series-8'), HU.tok('--series-4'), HU.tok('--series-2'), HU.tok('--series-7'), HU.tok('--series-5'), HU.tok('--series-1')];
+(async () => {
+  const [cpu, gpu, users, accts, out, util] = await Promise.all([
+    HU.getJSON('/api/v1/usage/timeseries', {...P, metric: 'cpu_hours', group_by: 'partition', top_n: 8}),
+    HU.getJSON('/api/v1/usage/timeseries', {...P, metric: 'gpu_hours', group_by: 'partition', top_n: 8}),
+    HU.getJSON('/api/v1/leaderboard', {...P, metric: 'cpu_hours', by: 'user', limit: 10}),
+    HU.getJSON('/api/v1/leaderboard', {...P, metric: 'cpu_hours', by: 'account', limit: 10}),
+    HU.getJSON('/api/v1/outcomes', P),
+    HU.getJSON('/api/v1/utilization', {...P, resource: 'cpu'}),
+  ]);
+  if (!cpu) return;
+  HU.onRender(() => {
+    HU.stackedBars(document.getElementById('cpu-by-part'), cpu.buckets, cpu.series, {unit: 'CPU-h', yTitle: 'CPU-hours', digits: 0});
+    HU.stackedBars(document.getElementById('gpu-by-part'), gpu.buckets, gpu.series, {unit: 'GPU-h', yTitle: 'GPU-hours', digits: 0});
+    HU.hbar(document.getElementById('top-users'), users.items.map(i => i.name), users.items.map(i => i.value), {unit: 'CPU-h', label: 'CPU-hours'});
+    HU.hbar(document.getElementById('top-accounts'), accts.items.map(i => i.name), accts.items.map(i => i.value), {unit: 'CPU-h', label: 'CPU-hours', color: HU.tok('--series-3')});
+    HU.stackedBars(document.getElementById('outcomes'), out.buckets, out.series.filter(s => s.values.some(v => v > 0)), {unit: 'jobs', yTitle: 'Jobs', digits: 0, colors: outcomeColors()});
+    HU.lines(document.getElementById('util'), util.days, util.series.slice(0, 8), {unit: '%', yTitle: '% of capacity', percent: true});
+  });
+})().catch(e => console.error(e));
+</script>
+{% endblock %}

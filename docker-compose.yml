@@ -1,0 +1,84 @@
+# Local development / testing, and the on-prem hosting fallback.
+#
+#   make up            -> Postgres + app on http://localhost:8000 (AUTH_MODE=dev, no CAS)
+#   make seed          -> load synthetic data so every page has something to chart
+#   make shell         -> a shell inside the app container; `make test`, `make lint`, `make seed` work there too
+#   make cdk-shell     -> isolated AWS/CDK toolbox (profile "cdk"; never started by `make up`)
+#   docker compose --profile tls up -d   -> adds Caddy with automatic Let's Encrypt (set HPCUSAGE_HOST)
+#
+# Copy .env.example to .env first.
+
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: hpcusage
+      POSTGRES_PASSWORD: hpcusage
+      POSTGRES_DB: hpcusage
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hpcusage -d hpcusage"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build:
+      context: .
+      target: runtime      # docker-compose.override.yml switches this to `dev` for local work
+    image: hpcusage:local
+    env_file: .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://hpcusage:hpcusage@db:5432/hpcusage}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    profiles: ["tls"]
+    environment:
+      HPCUSAGE_HOST: ${HPCUSAGE_HOST:-localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    restart: unless-stopped
+
+  # Isolated deployment toolbox: CDK CLI + Python CDK libs + AWS CLI (infra/Dockerfile). No Docker
+  # socket: the app image is built/pushed on the host by `make push`. The repo is mounted at
+  # /workspace and your AWS config at /root/.aws. Credentials come from ~/.aws (AWS_PROFILE) or from
+  # AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN if they are set in your shell.
+  cdk:
+    profiles: ["cdk"]
+    build: ./infra
+    image: hpcusage-cdk:local
+    working_dir: /workspace/infra
+    volumes:
+      - .:/workspace
+      - ${AWS_CONFIG_DIR:-~/.aws}:/root/.aws
+    environment:
+      AWS_PROFILE: ${AWS_PROFILE:-default}
+      AWS_REGION: ${AWS_REGION:-us-west-2}
+      AWS_DEFAULT_REGION: ${AWS_REGION:-us-west-2}
+      AWS_ACCESS_KEY_ID:
+      AWS_SECRET_ACCESS_KEY:
+      AWS_SESSION_TOKEN:
+    stdin_open: true
+    tty: true
+
+volumes:
+  pgdata:
+  caddy_data:
+  caddy_config:

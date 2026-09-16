@@ -1,0 +1,16 @@
+.env
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+infra/cdk.out/
+infra/.venv/
+.venv/
+venv/
+*.json.gz
+.hpcusage/
+app/hpcusage/static/plotly.min.js
+.claude/

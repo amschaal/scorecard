@@ -1,0 +1,6 @@
+# Copy to ~/.hpcusage/config.ini and chmod 600 it (it contains the token).
+[hpcusage]
+url = https://hpcusage.ucdavis.edu
+token = REPLACE_WITH_PER_CLUSTER_TOKEN
+cluster = hive
+timezone = America/Los_Angeles

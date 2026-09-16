@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Leaderboard · {{ cluster.display_name }}{% endblock %}
+{% block head %}
+<div class="page-head"><h1>Leaderboard</h1><span class="sub">{{ cluster.display_name }} · {{ window.from }} → {{ window.to }}</span></div>
+{% endblock %}
+{% block controls %}
+<form method="get" id="lb-form">
+  <input type="hidden" name="from" value="{{ window.from }}"><input type="hidden" name="to" value="{{ window.to }}">
+  <label>Metric <select name="metric">{% for k, m in metrics.items() %}<option value="{{ k }}" {{ 'selected' if k == metric }}>{{ m[1] }}</option>{% endfor %}</select></label>
+  <label>Rank <select name="by"><option value="user" {{ 'selected' if by == 'user' }}>users</option><option value="account" {{ 'selected' if by == 'account' }}>accounts</option></select></label>
+  <label>Partition <select name="partition"><option value="">all</option>{% for p in partitions %}<option value="{{ p }}" {{ 'selected' if p == partition }}>{{ p }}</option>{% endfor %}</select></label>
+  <button class="btn" type="submit">Go</button>
+</form>
+{% endblock %}
+{% block content %}
+<div class="grid">
+  <div class="card col-4"><h2>Top 25 <span class="hint" id="lb-total"></span></h2><div class="chart tall" id="lb-chart"></div></div>
+  <div class="card col-8"><h2>Ranking</h2><div id="lb-table"></div></div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+const P = { cluster: "{{ cluster.name }}", from: "{{ window.from }}", to: "{{ window.to }}", metric: "{{ metric }}", by: "{{ by }}", partition: "{{ partition }}", limit: 25 };
+(async () => {
+  const lb = await HU.getJSON('/api/v1/leaderboard', P);
+  if (!lb) return;
+  document.getElementById('lb-total').textContent = `${HU.fmt.num(lb.total)} ${lb.label} total in window`;
+  HU.onRender(() => HU.hbar(document.getElementById('lb-chart'), lb.items.map(i => i.name), lb.items.map(i => i.value), {unit: lb.unit, label: lb.label, digits: 0}));
+  const kind = lb.by === 'account' ? 'accounts' : 'users';
+  const rows = lb.items.map(i => `<tr><td class="rank">${i.rank}</td><td>${HU.linkTo(kind, P.cluster, i.name)}</td>
+    <td class="num"><b>${HU.fmt.num(i.value, 0)}</b></td><td class="num">${HU.fmt.pct(i.share, 1)}</td>
+    <td class="num">${HU.fmt.num(i.jobs)}</td><td class="num">${HU.fmt.num(i.cpu_hours)}</td><td class="num">${HU.fmt.num(i.gpu_hours)}</td>
+    <td class="num">${HU.fmt.num(i.mem_gb_hours)}</td><td class="num">${HU.fmt.pct(i.cpu_eff)}</td>
+    ${lb.by === 'user' ? `<td class="muted">${HU.esc(i.accounts || '')}</td>` : ''}</tr>`).join('');
+  document.getElementById('lb-table').innerHTML = `<div class="scroll"><table class="data"><tr><th></th><th>${lb.by}</th><th class="num">${lb.label}</th><th class="num">Share</th>
+    <th class="num">Jobs</th><th class="num">CPU-h</th><th class="num">GPU-h</th><th class="num">Mem GB-h</th><th class="num">CPU eff</th>${lb.by === 'user' ? '<th>Accounts</th>' : ''}</tr>${rows || '<tr><td colspan="10" class="muted">No data</td></tr>'}</table></div>`;
+})().catch(e => console.error(e));
+</script>
+{% endblock %}

@@ -1,0 +1,7 @@
+# Reverse proxy with automatic HTTPS for the on-prem hosting fallback.
+# HPCUSAGE_HOST must be a public DNS name pointing at this machine (ports 80/443 open).
+# For a purely local test, set HPCUSAGE_HOST=localhost and Caddy uses a self-signed cert.
+{$HPCUSAGE_HOST} {
+    encode gzip
+    reverse_proxy app:8000
+}
