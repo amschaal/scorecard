@@ -116,12 +116,13 @@ Locally, `AUTH_MODE=dev` logs everyone in as `DEV_USER`.
 ## Deploying to AWS
 
 See [infra/README.md](infra/README.md). CDK and the AWS CLI run in an isolated container with no
-Docker socket (`make cdk-shell`, `make synth`, `make deploy-*`); the app image is built and pushed
-by the host (`make push`) and App Runner deploys from ECR. First time: `make bootstrap`,
-`make deploy-base`, `scripts/set_secrets.sh` (inside `make cdk-shell`), `make push`, `make deploy-app`,
-request the DNS records printed by `scripts/domain_records.sh` from campus DNS, register the CAS
-service URL, then install the collector on each cluster with its token. Afterwards a code change
-is just `make push`.
+Docker socket (`make cdk-shell`, `make synth`, `make deploy-*`), using a project-scoped IAM user whose
+key lives in a Docker volume rather than your `~/.aws`; the app image is built and pushed by the host
+(`make push`) and App Runner deploys from ECR. First time: `make bootstrap` and
+`scripts/create_deployer.sh` with your admin credentials, then `make deploy-base`,
+`scripts/set_secrets.sh` (inside `make cdk-shell`), `make push`, `make deploy-app`, request the DNS
+records printed by `scripts/domain_records.sh` from campus DNS, register the CAS service URL, and
+install the collector on each cluster with its token. Afterwards a code change is just `make push`.
 
 ## Hosting on-prem instead
 

@@ -21,11 +21,56 @@ CDK CLI, the Python CDK libraries and the AWS CLI v2; `docker-compose.yml` runs 
 service (profile `cdk`, so `make up` never starts it) with:
 
 * the repo mounted at `/workspace` (cwd `infra/`),
-* `~/.aws` mounted at `/root/.aws` (override with `AWS_CONFIG_DIR`), `AWS_PROFILE` / `AWS_REGION`
-  passed through (defaults `default` / `us-west-2`), plus `AWS_ACCESS_KEY_ID`-style variables if set.
+* the external Docker volume `hpcusage-cdk-aws` mounted at `/root/.aws`, holding the project-scoped
+  credentials (next section). Set `AWS_CONFIG_DIR=~/.aws` to use your host credentials instead.
+  `AWS_PROFILE` / `AWS_REGION` are passed through (defaults `default` / `us-west-2`), plus
+  `AWS_ACCESS_KEY_ID`-style variables if set in your shell.
 
 No Docker socket is mounted. `make push` runs `docker build`/`docker push` on the host and only
 fetches the ECR login password through the container.
+
+## Project-scoped credentials
+
+The toolbox does not use your personal AWS credentials day to day. Instead a dedicated IAM user
+(`hpcusage-deployer`) with the inline policy in [iam/deployer-policy.json](iam/deployer-policy.json)
+lives in the `hpcusage-cdk-aws` Docker volume — outside the repo and outside your `~/.aws`, and never
+removed by `docker compose down -v` (it is declared `external`).
+
+What the policy allows, and nothing else:
+
+| Purpose | Permission |
+|---|---|
+| `cdk deploy` / `diff` / VPC lookup | `sts:AssumeRole` on the CDK bootstrap roles `cdk-<qualifier>-*-role-<account>-<region>`; read the bootstrap version parameter |
+| `make push` | `ecr:GetAuthorizationToken` + push/pull on repositories `hpcusage-*` |
+| helper scripts | `cloudformation:DescribeStacks` on `HpcUsage-*` / `CDKToolkit`, read/write secrets `hpcusage/*`, App Runner `StartDeployment` / `DescribeCustomDomains` on services `hpcusage-*` |
+
+The actual resource changes happen under CloudFormation's bootstrap execution role, which is how CDK is
+designed; the deployer keys themselves cannot touch anything outside the project.
+
+Two steps need your own (admin) credentials, once:
+
+```bash
+AWS_CONFIG_DIR=~/.aws make bootstrap          # creates the CDK bootstrap roles/bucket in the account
+AWS_CONFIG_DIR=~/.aws make cdk-shell
+  ../scripts/create_deployer.sh               # IAM user + policy; prints an access key (shown once)
+  exit
+```
+
+Then store the key in the volume and use it from now on:
+
+```bash
+make cdk-shell                                # /root/.aws is the volume
+  aws configure                               # paste the key; region us-west-2; output json
+  aws sts get-caller-identity                 # arn:aws:iam::<account>:user/hpcusage-deployer
+```
+
+Rotate with `aws iam create-access-key` / `delete-access-key` (max two keys per user) and re-run
+`aws configure`. `docker volume rm hpcusage-cdk-aws` wipes the stored key.
+
+Tighter still, if you want the CDK roles themselves project-specific: bootstrap with
+`cdk bootstrap --qualifier hpcusage --cloudformation-execution-policies <scoped policy ARN>`, set
+`"@aws-cdk/core:bootstrapQualifier": "hpcusage"` in `cdk.json`, and run `create_deployer.sh` with
+`CDK_QUALIFIER=hpcusage`. Not required to get started.
 
 ```bash
 make cdk-build                  # build the toolbox image (again after changing infra/Dockerfile or requirements.txt)
@@ -52,6 +97,8 @@ Pick **two or more subnets in different AZs** of that VPC **that have a route to
 Put the values in `cdk.json` (`vpc_id`, `subnet_ids`, `rds_security_group_id`, `domain`, `clusters`).
 
 ## First deployment
+
+With the deployer credentials in place (previous section):
 
 ```bash
 make deploy-base                            # VPC connector, ECR repo, secrets

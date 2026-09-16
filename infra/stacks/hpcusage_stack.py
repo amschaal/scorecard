@@ -81,20 +81,24 @@ class HpcUsageBaseStack(Stack):
             lifecycle_rules=[ecr.LifecycleRule(description="keep the last 20 images", max_image_count=20)],
         )
 
-        # --- secrets --------------------------------------------------------------------------
+        # --- secrets (explicit names so an IAM policy can scope to hpcusage/*) -------------------
+        prefix = f"hpcusage/{ctx['env_name']}"
         self.db_url_secret = sm.Secret(
-            self, "DatabaseUrl", description="hpcusage DATABASE_URL (postgresql://user:pass@host:5432/db)",
+            self, "DatabaseUrl", secret_name=f"{prefix}/database-url",
+            description="hpcusage DATABASE_URL (postgresql://user:pass@host:5432/db)",
             secret_string_value=cdk.SecretValue.unsafe_plain_text(
                 "postgresql://CHANGE_ME:CHANGE_ME@localhost:5432/hpcusage"),
             removal_policy=RemovalPolicy.RETAIN,
         )
         self.session_secret = sm.Secret(
-            self, "SessionSecret", description="hpcusage cookie-signing secret",
+            self, "SessionSecret", secret_name=f"{prefix}/session-secret",
+            description="hpcusage cookie-signing secret",
             generate_secret_string=sm.SecretStringGenerator(password_length=64, exclude_punctuation=True),
             removal_policy=RemovalPolicy.RETAIN,
         )
         self.tokens_secret = sm.Secret(
-            self, "CollectorTokens", description='hpcusage COLLECTOR_TOKENS JSON {"cluster": "token"}',
+            self, "CollectorTokens", secret_name=f"{prefix}/collector-tokens",
+            description='hpcusage COLLECTOR_TOKENS JSON {"cluster": "token"}',
             secret_string_value=cdk.SecretValue.unsafe_plain_text("{}"),
             removal_policy=RemovalPolicy.RETAIN,
         )

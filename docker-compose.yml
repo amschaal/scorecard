@@ -57,9 +57,13 @@ services:
     restart: unless-stopped
 
   # Isolated deployment toolbox: CDK CLI + Python CDK libs + AWS CLI (infra/Dockerfile). No Docker
-  # socket: the app image is built/pushed on the host by `make push`. The repo is mounted at
-  # /workspace and your AWS config at /root/.aws. Credentials come from ~/.aws (AWS_PROFILE) or from
-  # AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN if they are set in your shell.
+  # socket: the app image is built/pushed on the host by `make push`. The repo is mounted at /workspace.
+  #
+  # Credentials: /root/.aws is the external Docker volume `hpcusage-cdk-aws` (created by the make
+  # targets, never removed by `compose down -v`), holding the project-scoped IAM user written there
+  # once with `aws configure` — see infra/README.md "Project-scoped credentials". To use your own
+  # host credentials instead (one-time admin steps), set AWS_CONFIG_DIR=~/.aws. AWS_ACCESS_KEY_ID /
+  # AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN are passed through if set in your shell.
   cdk:
     profiles: ["cdk"]
     build: ./infra
@@ -67,7 +71,7 @@ services:
     working_dir: /workspace/infra
     volumes:
       - .:/workspace
-      - ${AWS_CONFIG_DIR:-~/.aws}:/root/.aws
+      - ${AWS_CONFIG_DIR:-hpcusage-cdk-aws}:/root/.aws
     environment:
       AWS_PROFILE: ${AWS_PROFILE:-default}
       AWS_REGION: ${AWS_REGION:-us-west-2}
@@ -82,3 +86,5 @@ volumes:
   pgdata:
   caddy_data:
   caddy_config:
+  hpcusage-cdk-aws:
+    external: true   # docker volume create hpcusage-cdk-aws (make cdk-volume); lives outside the project

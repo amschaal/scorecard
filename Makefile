@@ -10,7 +10,7 @@
 # is built and pushed by `make push` with the host's Docker; App Runner deploys from ECR.
 # Inside the cdk container CDK=cdk and AWS_CLI=aws, so the same targets call the CLIs directly.
 .PHONY: help up down logs shell seed test test-collector test-app lint vendor build token backfill \
-        cdk-build cdk-shell bootstrap synth diff push deploy-base deploy-app deploy clean need-docker
+        cdk-build cdk-volume cdk-shell bootstrap synth diff push deploy-base deploy-app deploy clean need-docker
 
 COMPOSE ?= docker compose
 PYTHON  ?= python3
@@ -71,25 +71,30 @@ backfill: ## Usage: make backfill CLUSTER=hive FROM=2026-01-01 TO=2026-09-01 (ru
 	scripts/backfill.sh $(CLUSTER) $(FROM) $(TO)
 
 # --- AWS deployment (ENV_NAME=prod) ---------------------------------------------
+# Credentials for the toolbox live in the external Docker volume hpcusage-cdk-aws (project-scoped
+# IAM user, see infra/README.md). Override with AWS_CONFIG_DIR=~/.aws for the one-time admin steps.
 cdk-build: need-docker ## (Re)build the CDK toolbox image
 	$(COMPOSE) --profile cdk build cdk
 
-cdk-shell: need-docker ## Shell in the CDK/AWS toolbox (cwd infra/; aws + cdk available)
+cdk-volume: need-docker ## Create the credentials volume if missing (idempotent)
+	@docker volume create hpcusage-cdk-aws >/dev/null
+
+cdk-shell: cdk-volume ## Shell in the CDK/AWS toolbox (cwd infra/; aws + cdk available)
 	$(COMPOSE) --profile cdk run --rm cdk
 
-bootstrap: need-docker ## CDK bootstrap (once per AWS account/region)
+bootstrap: cdk-volume ## CDK bootstrap (once per AWS account/region; needs admin creds: AWS_CONFIG_DIR=~/.aws)
 	$(CDK) bootstrap
 
-synth: need-docker ## CDK synth (both stacks)
+synth: cdk-volume ## CDK synth (both stacks)
 	$(CDK) synth --all
 
-diff: need-docker ## CDK diff against what is deployed
+diff: cdk-volume ## CDK diff against what is deployed
 	$(CDK) diff --all
 
-deploy-base: need-docker ## Deploy VPC connector, ECR repo, secrets (then run scripts/set_secrets.sh)
+deploy-base: cdk-volume ## Deploy VPC connector, ECR repo, secrets (then run scripts/set_secrets.sh)
 	$(CDK) deploy $(STACK_BASE)
 
-push: need-docker ## Build the app image on the host and push it to ECR (App Runner auto-deploys :latest)
+push: cdk-volume ## Build the app image on the host and push it to ECR (App Runner auto-deploys :latest)
 	$(eval ECR_URI := $(shell $(call stack_output,$(STACK_BASE),EcrRepositoryUri)))
 	@test -n "$(ECR_URI)" || { echo "no ECR repository yet: run 'make deploy-base' first"; exit 1; }
 	$(AWS_CLI) ecr get-login-password | docker login --username AWS --password-stdin $(firstword $(subst /, ,$(ECR_URI)))
@@ -98,7 +103,7 @@ push: need-docker ## Build the app image on the host and push it to ECR (App Run
 	docker push $(ECR_URI):latest
 	@echo "pushed $(ECR_URI):latest ($(GIT_SHA)); App Runner redeploys automatically once the service exists"
 
-deploy-app: need-docker ## Deploy the App Runner service (needs a pushed image and real secrets)
+deploy-app: cdk-volume ## Deploy the App Runner service (needs a pushed image and real secrets)
 	@$(AWS_CLI) secretsmanager get-secret-value --secret-id $$($(call stack_output,$(STACK_BASE),DatabaseUrlSecretArn)) \
 	    --query SecretString --output text | grep -q CHANGE_ME \
 	  && { echo "DATABASE_URL secret is still the placeholder: run scripts/set_secrets.sh $(ENV_NAME) (make cdk-shell)"; exit 1; } || true
