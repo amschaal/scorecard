@@ -6,17 +6,15 @@
 #   AWS_CONFIG_DIR=~/.aws make cdk-shell
 #   ../scripts/create_deployer.sh [user-name]
 #
-# Env: AWS_REGION (default us-west-2), CDK_QUALIFIER (default hnb659fds — change only if you
-# bootstrapped with --qualifier).
+# Env: AWS_REGION (default us-west-2). The bootstrap qualifier and toolkit stack name are read from
+# infra/cdk.json (see scripts/bootstrap.sh).
 set -euo pipefail
+source "$(dirname "$0")/cdk_env.sh"
 USER_NAME=${1:-hpcusage-deployer}
-REGION=${AWS_REGION:-${AWS_DEFAULT_REGION:-us-west-2}}
-QUALIFIER=${CDK_QUALIFIER:-hnb659fds}
 POLICY_FILE="$(dirname "$0")/../infra/iam/deployer-policy.json"
-ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 
-echo "account $ACCOUNT_ID, region $REGION, bootstrap qualifier $QUALIFIER"
-policy=$(sed -e "s/ACCOUNT_ID/$ACCOUNT_ID/g" -e "s/REGION/$REGION/g" -e "s/QUALIFIER/$QUALIFIER/g" "$POLICY_FILE")
+echo "account $ACCOUNT_ID, region $REGION, bootstrap qualifier $QUALIFIER, toolkit stack $TOOLKIT_STACK"
+policy=$(render_policy "$POLICY_FILE")
 
 if aws iam get-user --user-name "$USER_NAME" >/dev/null 2>&1; then
   echo "IAM user $USER_NAME already exists; updating its policy"

@@ -29,7 +29,54 @@ service (profile `cdk`, so `make up` never starts it) with:
 No Docker socket is mounted. `make push` runs `docker build`/`docker push` on the host and only
 fetches the ECR login password through the container.
 
-## Project-scoped credentials
+## One-time setup: point cdk.json at the RDS network
+
+Find the RDS networking facts:
+
+```bash
+aws rds describe-db-instances --db-instance-identifier <id> \
+  --query 'DBInstances[0].{vpc:DBSubnetGroup.VpcId,subnets:DBSubnetGroup.Subnets[].SubnetIdentifier,sgs:VpcSecurityGroups[].VpcSecurityGroupId,public:PubliclyAccessible}'
+```
+
+Pick **two or more subnets in different AZs** of that VPC **that have a route to the internet**
+(NAT or IGW) — App Runner sends *all* egress through the connector, including CAS validation.
+Put the values in `cdk.json` (`vpc_id`, `subnet_ids`, `rds_security_group_id`, `domain`, `clusters`).
+Do this before bootstrapping: the bootstrap's execution policy is pinned to `vpc_id`.
+
+## Project-scoped AWS access
+
+Nothing this project runs can touch anything else in the account. Two layers:
+
+### 1. A private CDK bootstrap (`make bootstrap`)
+
+[scripts/bootstrap.sh](../scripts/bootstrap.sh) does not use the account-wide default bootstrap
+(stack `CDKToolkit`, qualifier `hnb659fds`, `AdministratorAccess` execution role). It creates a
+separate bootstrap stack **`CDKToolkit-hpcusage`** with qualifier **`hpcusage`** (both set in
+`cdk.json`), so its roles and bucket are `cdk-hpcusage-*` and it cannot collide with any other CDK
+project in the account. Its CloudFormation execution role — the identity that actually creates and
+deletes resources during `cdk deploy` — carries the customer-managed policy `hpcusage-cfn-exec`,
+rendered from [iam/cfn-exec-policy.json](iam/cfn-exec-policy.json), instead of `AdministratorAccess`.
+That policy allows:
+
+| Resource | Scope |
+|---|---|
+| App Runner services and VPC connectors | named `hpcusage-*` |
+| ECR repositories | named `hpcusage-*` |
+| Secrets Manager secrets | named `hpcusage/*` |
+| Lambda (the custom-domain custom resource) | named `hpcusage-*` |
+| IAM roles (create/delete, inline policies, `PassRole`) | under path `/hpcusage/`; the only attachable managed policy is `AWSLambdaBasicExecutionRole`; service-linked roles for App Runner only |
+| Security groups | create in, and add/remove rules on groups in, the RDS VPC (`vpc_id`) — this is the one place a name pattern cannot apply, since the ingress rule goes on the *existing* RDS group |
+| CDK assets bucket | read `cdk-hpcusage-assets-*` (Lambda code) |
+
+Within each of those scopes the actions are broad (`apprunner:*` on `service/hpcusage-*`, …):
+the isolation is by resource name, which is what keeps the policy stable across CDK upgrades.
+The stacks, in turn, name every resource `hpcusage-*` or put it under `/hpcusage/` (see `IAM_PATH`
+in `stacks/hpcusage_stack.py`) — keep new resources on the same pattern or the execution role will
+be denied. If a deploy fails with `AccessDenied`, the CloudFormation event names the action and
+resource: add it to `cfn-exec-policy.json` and re-run `make bootstrap` (it updates the policy in
+place and is otherwise idempotent).
+
+### 2. A project-scoped deployer user
 
 The toolbox does not use your personal AWS credentials day to day. Instead a dedicated IAM user
 (`hpcusage-deployer`) with the inline policy in [iam/deployer-policy.json](iam/deployer-policy.json)
@@ -40,17 +87,18 @@ What the policy allows, and nothing else:
 
 | Purpose | Permission |
 |---|---|
-| `cdk deploy` / `diff` / VPC lookup | `sts:AssumeRole` on the CDK bootstrap roles `cdk-<qualifier>-*-role-<account>-<region>`; read the bootstrap version parameter |
+| `cdk deploy` / `diff` / VPC lookup | `sts:AssumeRole` on the bootstrap roles `cdk-hpcusage-*-role-<account>-<region>`; read the bootstrap version parameter |
 | `make push` | `ecr:GetAuthorizationToken` + push/pull on repositories `hpcusage-*` |
-| helper scripts | `cloudformation:DescribeStacks` on `HpcUsage-*` / `CDKToolkit`, read/write secrets `hpcusage/*`, App Runner `StartDeployment` / `DescribeCustomDomains` on services `hpcusage-*` |
+| helper scripts | `cloudformation:DescribeStacks` on `HpcUsage-*` / `CDKToolkit-hpcusage`, read/write secrets `hpcusage/*`, App Runner `StartDeployment` / `DescribeCustomDomains` on services `hpcusage-*` |
 
-The actual resource changes happen under CloudFormation's bootstrap execution role, which is how CDK is
-designed; the deployer keys themselves cannot touch anything outside the project.
+So the deployer keys can only start deployments, and deployments can only touch project resources.
 
-Two steps need your own (admin) credentials, once:
+### Setting it up
+
+Two steps need your own (admin) credentials, once (`cdk.json` must already have `vpc_id`):
 
 ```bash
-AWS_CONFIG_DIR=~/.aws make bootstrap          # creates the CDK bootstrap roles/bucket in the account
+AWS_CONFIG_DIR=~/.aws make bootstrap          # policy hpcusage-cfn-exec + stack CDKToolkit-hpcusage
 AWS_CONFIG_DIR=~/.aws make cdk-shell
   ../scripts/create_deployer.sh               # IAM user + policy; prints an access key (shown once)
   exit
@@ -67,34 +115,21 @@ make cdk-shell                                # /root/.aws is the volume
 Rotate with `aws iam create-access-key` / `delete-access-key` (max two keys per user) and re-run
 `aws configure`. `docker volume rm hpcusage-cdk-aws` wipes the stored key.
 
-Tighter still, if you want the CDK roles themselves project-specific: bootstrap with
-`cdk bootstrap --qualifier hpcusage --cloudformation-execution-policies <scoped policy ARN>`, set
-`"@aws-cdk/core:bootstrapQualifier": "hpcusage"` in `cdk.json`, and run `create_deployer.sh` with
-`CDK_QUALIFIER=hpcusage`. Not required to get started.
+To remove the project from the account entirely: `cdk destroy --all`, delete the
+`CDKToolkit-hpcusage` stack (empty its `cdk-hpcusage-assets-*` bucket first), the `hpcusage-cfn-exec`
+policy and the `hpcusage-deployer` user. The ECR repository and secrets are `RETAIN`ed by the
+stacks and need deleting by hand.
 
 ```bash
 make cdk-build                  # build the toolbox image (again after changing infra/Dockerfile or requirements.txt)
 make cdk-shell                  # interactive: aws sts get-caller-identity, cdk ..., ../scripts/*.sh
-make bootstrap                  # once per AWS account/region
+make bootstrap                  # once per AWS account/region (admin credentials)
 make synth / make diff
 ```
 
 If you use AWS SSO, run `aws sso login --profile <name>` on the host first; the container reads the
 cached token from `~/.aws`. On Linux hosts the container runs as root, so files it writes into the
 bind mount (`infra/cdk.out`, `infra/cdk.context.json`) will be root-owned.
-
-## One-time setup
-
-Find the RDS networking facts:
-
-```bash
-aws rds describe-db-instances --db-instance-identifier <id> \
-  --query 'DBInstances[0].{vpc:DBSubnetGroup.VpcId,subnets:DBSubnetGroup.Subnets[].SubnetIdentifier,sgs:VpcSecurityGroups[].VpcSecurityGroupId,public:PubliclyAccessible}'
-```
-
-Pick **two or more subnets in different AZs** of that VPC **that have a route to the internet**
-(NAT or IGW) — App Runner sends *all* egress through the connector, including CAS validation.
-Put the values in `cdk.json` (`vpc_id`, `subnet_ids`, `rds_security_group_id`, `domain`, `clusters`).
 
 ## First deployment
 

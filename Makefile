@@ -17,7 +17,8 @@ PYTHON  ?= python3
 ENV_NAME ?= prod
 STACK_BASE = HpcUsage-$(ENV_NAME)-base
 STACK_APP  = HpcUsage-$(ENV_NAME)
-CDK     ?= $(COMPOSE) --profile cdk run --rm cdk cdk -c env_name=$(ENV_NAME)
+CDK_RUN ?= $(COMPOSE) --profile cdk run --rm cdk
+CDK     ?= $(CDK_RUN) cdk -c env_name=$(ENV_NAME)
 AWS_CLI ?= $(COMPOSE) --profile cdk run --rm -T cdk aws
 GIT_SHA ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
 stack_output = $(AWS_CLI) cloudformation describe-stacks --stack-name $(1) \
@@ -82,8 +83,8 @@ cdk-volume: need-docker ## Create the credentials volume if missing (idempotent)
 cdk-shell: cdk-volume ## Shell in the CDK/AWS toolbox (cwd infra/; aws + cdk available)
 	$(COMPOSE) --profile cdk run --rm cdk
 
-bootstrap: cdk-volume ## CDK bootstrap (once per AWS account/region; needs admin creds: AWS_CONFIG_DIR=~/.aws)
-	$(CDK) bootstrap
+bootstrap: cdk-volume ## Project-scoped CDK bootstrap (once per account/region; admin creds: AWS_CONFIG_DIR=~/.aws)
+	$(CDK_RUN) ../scripts/bootstrap.sh
 
 synth: cdk-volume ## CDK synth (both stacks)
 	$(CDK) synth --all

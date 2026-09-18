@@ -19,7 +19,7 @@
       "Action": ["cloudformation:DescribeStacks", "cloudformation:DescribeStackEvents", "cloudformation:GetTemplate"],
       "Resource": [
         "arn:aws:cloudformation:REGION:ACCOUNT_ID:stack/HpcUsage-*/*",
-        "arn:aws:cloudformation:REGION:ACCOUNT_ID:stack/CDKToolkit/*"
+        "arn:aws:cloudformation:REGION:ACCOUNT_ID:stack/TOOLKIT_STACK/*"
       ]
     },
     {

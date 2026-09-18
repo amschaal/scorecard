@@ -1,10 +1,12 @@
 {
   "app": "python3 app.py",
+  "toolkitStackName": "CDKToolkit-hpcusage",
   "watch": {
     "include": ["**"],
     "exclude": ["README.md", "cdk*.json", "requirements*.txt", "**/__pycache__", "cdk.out"]
   },
   "context": {
+    "@aws-cdk/core:bootstrapQualifier": "hpcusage",
     "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
     "@aws-cdk/core:checkSecretUsage": true,
     "@aws-cdk/aws-iam:minimizePolicies": true,

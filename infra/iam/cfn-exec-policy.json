@@ -1,0 +1,105 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadCdkAssets",
+      "Effect": "Allow",
+      "Action": ["s3:GetObject", "s3:GetObjectVersion", "s3:GetBucketLocation", "s3:ListBucket"],
+      "Resource": [
+        "arn:aws:s3:::cdk-QUALIFIER-assets-ACCOUNT_ID-REGION",
+        "arn:aws:s3:::cdk-QUALIFIER-assets-ACCOUNT_ID-REGION/*"
+      ]
+    },
+    {
+      "Sid": "ActionsWithoutResources",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DescribeVpcs", "ec2:DescribeSubnets", "ec2:DescribeSecurityGroups", "ec2:DescribeSecurityGroupRules",
+        "ec2:DescribeAvailabilityZones", "ec2:DescribeTags",
+        "apprunner:ListServices", "apprunner:ListVpcConnectors",
+        "secretsmanager:GetRandomPassword"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "CreateSecurityGroupInRdsVpc",
+      "Effect": "Allow",
+      "Action": "ec2:CreateSecurityGroup",
+      "Resource": [
+        "arn:aws:ec2:REGION:ACCOUNT_ID:vpc/VPC_ID",
+        "arn:aws:ec2:REGION:ACCOUNT_ID:security-group/*"
+      ]
+    },
+    {
+      "Sid": "SecurityGroupRulesInRdsVpc",
+      "Effect": "Allow",
+      "Action": [
+        "ec2:DeleteSecurityGroup",
+        "ec2:AuthorizeSecurityGroupIngress", "ec2:AuthorizeSecurityGroupEgress",
+        "ec2:RevokeSecurityGroupIngress", "ec2:RevokeSecurityGroupEgress",
+        "ec2:UpdateSecurityGroupRuleDescriptionsIngress", "ec2:UpdateSecurityGroupRuleDescriptionsEgress"
+      ],
+      "Resource": "arn:aws:ec2:REGION:ACCOUNT_ID:security-group/*",
+      "Condition": {"ArnEquals": {"ec2:Vpc": "arn:aws:ec2:REGION:ACCOUNT_ID:vpc/VPC_ID"}}
+    },
+    {
+      "Sid": "TagSecurityGroups",
+      "Effect": "Allow",
+      "Action": ["ec2:CreateTags", "ec2:DeleteTags"],
+      "Resource": "arn:aws:ec2:REGION:ACCOUNT_ID:security-group/*"
+    },
+    {
+      "Sid": "ProjectAppRunner",
+      "Effect": "Allow",
+      "Action": "apprunner:*",
+      "Resource": [
+        "arn:aws:apprunner:REGION:ACCOUNT_ID:service/hpcusage-*",
+        "arn:aws:apprunner:REGION:ACCOUNT_ID:vpcconnector/hpcusage-*"
+      ]
+    },
+    {
+      "Sid": "ProjectEcr",
+      "Effect": "Allow",
+      "Action": "ecr:*",
+      "Resource": "arn:aws:ecr:REGION:ACCOUNT_ID:repository/hpcusage-*"
+    },
+    {
+      "Sid": "ProjectSecrets",
+      "Effect": "Allow",
+      "Action": "secretsmanager:*",
+      "Resource": "arn:aws:secretsmanager:REGION:ACCOUNT_ID:secret:hpcusage/*"
+    },
+    {
+      "Sid": "ProjectLambda",
+      "Effect": "Allow",
+      "Action": "lambda:*",
+      "Resource": "arn:aws:lambda:REGION:ACCOUNT_ID:function:hpcusage-*"
+    },
+    {
+      "Sid": "ProjectRoles",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole", "iam:DeleteRole", "iam:GetRole", "iam:UpdateRole", "iam:UpdateRoleDescription",
+        "iam:UpdateAssumeRolePolicy", "iam:TagRole", "iam:UntagRole", "iam:ListRoleTags",
+        "iam:PutRolePolicy", "iam:DeleteRolePolicy", "iam:GetRolePolicy", "iam:ListRolePolicies",
+        "iam:ListAttachedRolePolicies", "iam:ListInstanceProfilesForRole",
+        "iam:PassRole"
+      ],
+      "Resource": "arn:aws:iam::ACCOUNT_ID:role/hpcusage/*"
+    },
+    {
+      "Sid": "ProjectRolesLambdaLogging",
+      "Effect": "Allow",
+      "Action": ["iam:AttachRolePolicy", "iam:DetachRolePolicy"],
+      "Resource": "arn:aws:iam::ACCOUNT_ID:role/hpcusage/*",
+      "Condition": {"ArnEquals": {"iam:PolicyARN": "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"}}
+    },
+    {
+      "Sid": "AppRunnerServiceLinkedRoles",
+      "Effect": "Allow",
+      "Action": "iam:CreateServiceLinkedRole",
+      "Resource": "arn:aws:iam::ACCOUNT_ID:role/aws-service-role/*",
+      "Condition": {"StringEquals": {"iam:AWSServiceName": ["apprunner.amazonaws.com", "networking.apprunner.amazonaws.com"]}}
+    }
+  ]
+}

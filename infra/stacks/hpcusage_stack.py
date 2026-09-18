@@ -30,6 +30,10 @@ from aws_cdk import custom_resources as cr
 from constructs import Construct
 
 IMAGE_TAG = "latest"
+# Every resource these stacks create is named hpcusage-* (or, for IAM roles, lives under this path)
+# so the bootstrap's CloudFormation execution policy (infra/iam/cfn-exec-policy.json) can be limited
+# to exactly those names. Keep new resources on the same pattern.
+IAM_PATH = "/hpcusage/"
 
 
 def _ctx(scope: Construct) -> dict:
@@ -71,7 +75,7 @@ class HpcUsageBaseStack(Stack):
         rds_sg.add_ingress_rule(self.connector_sg, ec2.Port.tcp(5432), "hpcusage App Runner -> PostgreSQL")
         self.connector = apprunner.VpcConnector(
             self, "VpcConnector", vpc=vpc, vpc_subnets=ec2.SubnetSelection(subnets=subnets),
-            security_groups=[self.connector_sg],
+            security_groups=[self.connector_sg], vpc_connector_name=f"hpcusage-{ctx['env_name']}",
         )
 
         # --- image repository (filled by `make push`) --------------------------------------
@@ -104,7 +108,7 @@ class HpcUsageBaseStack(Stack):
         )
 
         # --- runtime role (read secrets) ----------------------------------------------------------
-        self.instance_role = iam.Role(self, "InstanceRole",
+        self.instance_role = iam.Role(self, "InstanceRole", path=IAM_PATH,
                                       assumed_by=iam.ServicePrincipal("tasks.apprunner.amazonaws.com"))
         for s in (self.db_url_secret, self.session_secret, self.tokens_secret):
             s.grant_read(self.instance_role)
@@ -126,6 +130,10 @@ class HpcUsageAppStack(Stack):
         self.add_dependency(base)
 
         app_base_url = f"https://{ctx['domain']}" if ctx["domain"] else "https://CHANGE_ME_AFTER_FIRST_DEPLOY"
+        # Explicit (instead of construct-generated) so it sits under IAM_PATH; pulls the image from ECR.
+        access_role = iam.Role(self, "AccessRole", path=IAM_PATH,
+                               assumed_by=iam.ServicePrincipal("build.apprunner.amazonaws.com"))
+        base.repository.grant_pull(access_role)
         service = apprunner.Service(
             self, "Service",
             service_name=f"hpcusage-{ctx['env_name']}",
@@ -152,6 +160,7 @@ class HpcUsageAppStack(Stack):
             cpu=apprunner.Cpu.of(ctx["cpu"]),
             memory=apprunner.Memory.of(ctx["memory"]),
             instance_role=base.instance_role,
+            access_role=access_role,
             vpc_connector=base.connector,
             auto_deployments_enabled=True,  # every `make push` to :latest rolls out a new deployment
             health_check=apprunner.HealthCheck.http(
@@ -163,8 +172,14 @@ class HpcUsageAppStack(Stack):
         # --- custom domain (campus DNS) ---------------------------------------------------------
         if ctx["domain"]:
             domain = ctx["domain"]
+            # Own role (under IAM_PATH) and function name for the custom-resource Lambda, for the same
+            # reason as above; the SDK-call policy below is attached to this role.
+            cr_role = iam.Role(
+                self, "CustomDomainRole", path=IAM_PATH, assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
+                managed_policies=[iam.ManagedPolicy.from_aws_managed_policy_name("service-role/AWSLambdaBasicExecutionRole")],
+            )
             assoc = cr.AwsCustomResource(
-                self, "CustomDomain",
+                self, "CustomDomain", role=cr_role, function_name=f"hpcusage-{ctx['env_name']}-custom-domain",
                 on_create=cr.AwsSdkCall(
                     service="AppRunner", action="associateCustomDomain",
                     parameters={"ServiceArn": service.service_arn, "DomainName": domain, "EnableWWWSubdomain": False},
@@ -174,7 +189,7 @@ class HpcUsageAppStack(Stack):
                     service="AppRunner", action="disassociateCustomDomain",
                     parameters={"ServiceArn": service.service_arn, "DomainName": domain},
                 ),
-                policy=cr.AwsCustomResourcePolicy.from_sdk_calls(resources=cr.AwsCustomResourcePolicy.ANY_RESOURCE),
+                policy=cr.AwsCustomResourcePolicy.from_sdk_calls(resources=[service.service_arn]),
                 install_latest_aws_sdk=False,
             )
             assoc.node.add_dependency(service)
