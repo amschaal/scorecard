@@ -12,7 +12,8 @@ ENV DEBIAN_FRONTEND=noninteractive \
     AWS_PAGER="" \
     PATH="/opt/venv/bin:${PATH}" \
     CDK=cdk \
-    AWS_CLI=aws
+    AWS_CLI=aws \
+    TOOLBOX=""
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
         bash ca-certificates curl git jq less make python3 python3-venv unzip \

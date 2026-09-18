@@ -60,9 +60,9 @@ services:
   # socket: the app image is built/pushed on the host by `make push`. The repo is mounted at /workspace.
   #
   # Credentials: /root/.aws is the external Docker volume `hpcusage-cdk-aws` (created by the make
-  # targets, never removed by `compose down -v`), holding the project-scoped IAM user written there
-  # once with `aws configure` — see infra/README.md "Project-scoped credentials". To use your own
-  # host credentials instead (one-time admin steps), set AWS_CONFIG_DIR=~/.aws. AWS_ACCESS_KEY_ID /
+  # targets, never removed by `compose down -v`), holding the push user's key written there once
+  # with `aws configure` — see infra/README.md "The push user". Deploys and the one-time scripts use
+  # your own host credentials instead: set AWS_CONFIG_DIR=~/.aws. AWS_ACCESS_KEY_ID /
   # AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN are passed through if set in your shell.
   cdk:
     profiles: ["cdk"]

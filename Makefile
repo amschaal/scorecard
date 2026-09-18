@@ -1,28 +1,36 @@
-# hpcusage developer entry points.
+# hpcusage — run `make help` for the target list.
 #
-# Every target that only needs Python/bash also works INSIDE the app container
+# Targets that only need Python + the app's dependencies work inside the app container
 # (`make shell`, or `docker compose exec app make <target>`): test, test-collector,
 # test-app, lint, seed, token, vendor, backfill. Targets that need Docker on the host
 # (up/down/logs/build/shell and the cdk-* / synth / diff / deploy targets) refuse to run elsewhere.
 #
-# CDK and the AWS CLI never run on the host: synth/diff/deploy/bootstrap go through the
-# isolated `cdk` compose service (infra/Dockerfile), which has no Docker socket. The app image
-# is built and pushed by `make push` with the host's Docker; App Runner deploys from ECR.
-# Inside the cdk container CDK=cdk and AWS_CLI=aws, so the same targets call the CLIs directly.
+# CDK and the AWS CLI never run on the host: they go through the isolated `cdk` compose service
+# (infra/Dockerfile), which has no Docker socket. Deployment is audit-then-run: `make synth` writes
+# plain CloudFormation to infra/cdk.out/ (offline), you review it, and the deploy targets send
+# exactly those files to CloudFormation with your own credentials (AWS_CONFIG_DIR=~/.aws) — they
+# never re-synthesize. Day to day only `make push` talks to AWS, with the push user's key, which
+# can do nothing but push to the project's ECR repository.
 .PHONY: help up down logs shell seed test test-collector test-app lint vendor build token backfill \
-        cdk-build cdk-volume cdk-shell bootstrap synth diff push deploy-base deploy-app deploy clean need-docker
+        cdk-build cdk-volume cdk-shell synth diff push deploy-base deploy-app deploy clean need-docker
 
 COMPOSE ?= docker compose
 PYTHON  ?= python3
 ENV_NAME ?= prod
+AWS_REGION ?= us-west-2
 STACK_BASE = HpcUsage-$(ENV_NAME)-base
 STACK_APP  = HpcUsage-$(ENV_NAME)
-CDK_RUN ?= $(COMPOSE) --profile cdk run --rm cdk
-CDK     ?= $(CDK_RUN) cdk -c env_name=$(ENV_NAME)
-AWS_CLI ?= $(COMPOSE) --profile cdk run --rm -T cdk aws
+TOOLBOX ?= $(COMPOSE) --profile cdk run --rm -T cdk
+CDK     ?= $(COMPOSE) --profile cdk run --rm cdk cdk -c env_name=$(ENV_NAME)
+AWS_CLI ?= $(TOOLBOX) aws
 GIT_SHA ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo dev)
 stack_output = $(AWS_CLI) cloudformation describe-stacks --stack-name $(1) \
                --query "Stacks[0].Outputs[?OutputKey=='$(2)'].OutputValue" --output text 2>/dev/null
+# Deploy a previously synthesized template as-is, printing its checksum so you can confirm it is
+# the file you reviewed. CAPABILITY_NAMED_IAM: the base stack names its push user.
+cfn_deploy = $(TOOLBOX) sh -c 'set -e; f=cdk.out/$(1).template.json; \
+    test -f $$f || { echo "$$f missing: run make synth, review it, then deploy"; exit 1; }; sha256sum $$f; \
+    aws cloudformation deploy --stack-name $(1) --template-file $$f --capabilities CAPABILITY_NAMED_IAM --no-fail-on-empty-changeset'
 # Inside the container docker-compose.override.yml sets HPCUSAGE_URL=http://app:8000.
 SEED_URL ?= $(or $(HPCUSAGE_URL),http://localhost:8000)
 SEED_DAYS ?= 45
@@ -72,8 +80,8 @@ backfill: ## Usage: make backfill CLUSTER=hive FROM=2026-01-01 TO=2026-09-01 (ru
 	scripts/backfill.sh $(CLUSTER) $(FROM) $(TO)
 
 # --- AWS deployment (ENV_NAME=prod) ---------------------------------------------
-# Credentials for the toolbox live in the external Docker volume hpcusage-cdk-aws (project-scoped
-# IAM user, see infra/README.md). Override with AWS_CONFIG_DIR=~/.aws for the one-time admin steps.
+# The external Docker volume hpcusage-cdk-aws holds the push user's key (infra/README.md); the
+# deploy targets need your own credentials instead: AWS_CONFIG_DIR=~/.aws make deploy-base.
 cdk-build: need-docker ## (Re)build the CDK toolbox image
 	$(COMPOSE) --profile cdk build cdk
 
@@ -83,34 +91,33 @@ cdk-volume: need-docker ## Create the credentials volume if missing (idempotent)
 cdk-shell: cdk-volume ## Shell in the CDK/AWS toolbox (cwd infra/; aws + cdk available)
 	$(COMPOSE) --profile cdk run --rm cdk
 
-bootstrap: cdk-volume ## Project-scoped CDK bootstrap (once per account/region; admin creds: AWS_CONFIG_DIR=~/.aws)
-	$(CDK_RUN) ../scripts/bootstrap.sh
+synth: cdk-volume ## Write plain CloudFormation to infra/cdk.out/ for review (offline; no credentials)
+	$(CDK) synth --all --quiet
+	@$(TOOLBOX) sha256sum cdk.out/$(STACK_BASE).template.json cdk.out/$(STACK_APP).template.json
 
-synth: cdk-volume ## CDK synth (both stacks)
-	$(CDK) synth --all
-
-diff: cdk-volume ## CDK diff against what is deployed
+diff: cdk-volume ## CDK diff of the synthesized templates against what is deployed (your credentials)
 	$(CDK) diff --all
 
-deploy-base: cdk-volume ## Deploy VPC connector, ECR repo, secrets (then run scripts/set_secrets.sh)
-	$(CDK) deploy $(STACK_BASE)
+deploy-base: cdk-volume ## Send the reviewed base template to CloudFormation (VPC connector, ECR + push user, secrets)
+	$(call cfn_deploy,$(STACK_BASE))
 
 push: cdk-volume ## Build the app image on the host and push it to ECR (App Runner auto-deploys :latest)
-	$(eval ECR_URI := $(shell $(call stack_output,$(STACK_BASE),EcrRepositoryUri)))
-	@test -n "$(ECR_URI)" || { echo "no ECR repository yet: run 'make deploy-base' first"; exit 1; }
+	$(eval ACCOUNT_ID := $(shell $(AWS_CLI) sts get-caller-identity --query Account --output text 2>/dev/null))
+	@test -n "$(ACCOUNT_ID)" || { echo "no AWS credentials in the toolbox: store the push user's key first (infra/README.md)"; exit 1; }
+	$(eval ECR_URI := $(ACCOUNT_ID).dkr.ecr.$(AWS_REGION).amazonaws.com/hpcusage-$(ENV_NAME))
 	$(AWS_CLI) ecr get-login-password | docker login --username AWS --password-stdin $(firstword $(subst /, ,$(ECR_URI)))
 	docker build --platform linux/amd64 --target runtime -t $(ECR_URI):latest -t $(ECR_URI):$(GIT_SHA) .
 	docker push $(ECR_URI):$(GIT_SHA)
 	docker push $(ECR_URI):latest
 	@echo "pushed $(ECR_URI):latest ($(GIT_SHA)); App Runner redeploys automatically once the service exists"
 
-deploy-app: cdk-volume ## Deploy the App Runner service (needs a pushed image and real secrets)
+deploy-app: cdk-volume ## Send the reviewed app template to CloudFormation (needs a pushed image and real secrets)
 	@$(AWS_CLI) secretsmanager get-secret-value --secret-id $$($(call stack_output,$(STACK_BASE),DatabaseUrlSecretArn)) \
 	    --query SecretString --output text | grep -q CHANGE_ME \
 	  && { echo "DATABASE_URL secret is still the placeholder: run scripts/set_secrets.sh $(ENV_NAME) (make cdk-shell)"; exit 1; } || true
-	$(CDK) deploy $(STACK_APP)
+	$(call cfn_deploy,$(STACK_APP))
 
-deploy: deploy-base push deploy-app ## Full deployment: base stack -> image push -> App Runner service
+deploy: deploy-base push deploy-app ## All three steps with one set of credentials (after make synth + review)
 
 # --- helpers -------------------------------------------------------------------
 .env:

@@ -1,21 +1,20 @@
 {
   "app": "python3 app.py",
-  "toolkitStackName": "CDKToolkit-hpcusage",
+  "versionReporting": false,
+  "pathMetadata": false,
   "watch": {
     "include": ["**"],
     "exclude": ["README.md", "cdk*.json", "requirements*.txt", "**/__pycache__", "cdk.out"]
   },
   "context": {
-    "@aws-cdk/core:bootstrapQualifier": "hpcusage",
     "@aws-cdk/aws-lambda:recognizeLayerVersion": true,
     "@aws-cdk/core:checkSecretUsage": true,
     "@aws-cdk/aws-iam:minimizePolicies": true,
     "@aws-cdk/core:enableStackNameDuplicates": true,
 
     "env_name": "prod",
-    "vpc_id": "vpc-CHANGE_ME",
     "subnet_ids": "subnet-CHANGE_ME_A,subnet-CHANGE_ME_B",
-    "rds_security_group_id": "sg-CHANGE_ME",
+    "connector_security_group_id": "sg-CHANGE_ME",
     "domain": "hpcusage.ucdavis.edu",
     "cas_base": "https://cas.ucdavis.edu/cas",
     "clusters": "{\"hive\": {\"display_name\": \"Hive\", \"timezone\": \"America/Los_Angeles\"}}",
