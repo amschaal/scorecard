@@ -3,7 +3,6 @@
 #   make up            -> Postgres + app on http://localhost:8000 (AUTH_MODE=dev, no CAS)
 #   make seed          -> load synthetic data so every page has something to chart
 #   make shell         -> a shell inside the app container; `make test`, `make lint`, `make seed` work there too
-#   make cdk-shell     -> isolated AWS/CDK toolbox (profile "cdk"; never started by `make up`)
 #   docker compose --profile tls up -d   -> adds Caddy with automatic Let's Encrypt (set HPCUSAGE_HOST)
 #
 # Copy .env.example to .env first.
@@ -56,35 +55,7 @@ services:
       - app
     restart: unless-stopped
 
-  # Isolated deployment toolbox: CDK CLI + Python CDK libs + AWS CLI (infra/Dockerfile). No Docker
-  # socket: the app image is built/pushed on the host by `make push`. The repo is mounted at /workspace.
-  #
-  # Credentials: /root/.aws is the external Docker volume `hpcusage-cdk-aws` (created by the make
-  # targets, never removed by `compose down -v`), holding the push user's key written there once
-  # with `aws configure` — see infra/README.md "The push user". Deploys and the one-time scripts use
-  # your own host credentials instead: set AWS_CONFIG_DIR=~/.aws. AWS_ACCESS_KEY_ID /
-  # AWS_SECRET_ACCESS_KEY / AWS_SESSION_TOKEN are passed through if set in your shell.
-  cdk:
-    profiles: ["cdk"]
-    build: ./infra
-    image: hpcusage-cdk:local
-    working_dir: /workspace/infra
-    volumes:
-      - .:/workspace
-      - ${AWS_CONFIG_DIR:-hpcusage-cdk-aws}:/root/.aws
-    environment:
-      AWS_PROFILE: ${AWS_PROFILE:-default}
-      AWS_REGION: ${AWS_REGION:-us-west-2}
-      AWS_DEFAULT_REGION: ${AWS_REGION:-us-west-2}
-      AWS_ACCESS_KEY_ID:
-      AWS_SECRET_ACCESS_KEY:
-      AWS_SESSION_TOKEN:
-    stdin_open: true
-    tty: true
-
 volumes:
   pgdata:
   caddy_data:
   caddy_config:
-  hpcusage-cdk-aws:
-    external: true   # docker volume create hpcusage-cdk-aws (make cdk-volume); lives outside the project

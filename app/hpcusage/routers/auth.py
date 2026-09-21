@@ -30,12 +30,18 @@ def safe_next(next_url: str | None) -> str:
     return next_url
 
 
-def service_url(settings: Settings, next_url: str) -> str:
+def base_url(settings: Settings, request: Request) -> str:
+    """APP_BASE_URL, or the scheme/host this request arrived on (uvicorn runs with --proxy-headers,
+    so behind App Runner that is https://<service>.<region>.awsapprunner.com)."""
+    return (settings.app_base_url or str(request.base_url)).rstrip("/")
+
+
+def service_url(settings: Settings, request: Request, next_url: str) -> str:
     """The CAS 'service' — must be byte-identical at login and validation time."""
-    return f"{settings.app_base_url.rstrip('/')}/auth/callback?{urlencode({'next': next_url})}"
+    return f"{base_url(settings, request)}/auth/callback?{urlencode({'next': next_url})}"
 
 
-def cas_client(settings: Settings, next_url: str = "/") -> CASClient:
+def cas_client(settings: Settings, request: Request, next_url: str = "/") -> CASClient:
     """A client bound to this request's service URL.
 
     python-cas urljoins 'login', 'logout' and 'p3/serviceValidate' onto server_url, so the
@@ -43,7 +49,7 @@ def cas_client(settings: Settings, next_url: str = "/") -> CASClient:
     """
     return CASClient(
         version=settings.cas_version,
-        service_url=service_url(settings, next_url),
+        service_url=service_url(settings, request, next_url),
         server_url=settings.cas_base.rstrip("/") + "/",
     )
 
@@ -61,7 +67,7 @@ def login(request: Request, next: str = "/", settings: Settings = Depends(get_se
     if settings.auth_mode == "dev":
         request.session["user"] = settings.dev_user
         return RedirectResponse(nxt, status_code=302)
-    return RedirectResponse(cas_client(settings, nxt).get_login_url(), status_code=302)
+    return RedirectResponse(cas_client(settings, request, nxt).get_login_url(), status_code=302)
 
 
 @router.get("/callback")
@@ -74,7 +80,7 @@ def callback(request: Request, ticket: str | None = None, next: str = "/",
     if not ticket:
         raise HTTPException(status_code=400, detail="missing ticket")
     try:
-        username, attrs, _pgtiou = cas_client(settings, nxt).verify_ticket(ticket)
+        username, attrs, _pgtiou = cas_client(settings, request, nxt).verify_ticket(ticket)
     except (requests.RequestException, SyntaxError) as e:  # network error, or unparseable XML from CAS
         log.warning("CAS validation request failed: %s", e)
         raise HTTPException(status_code=502, detail="could not validate ticket with CAS") from e
@@ -97,4 +103,5 @@ def logout(request: Request, settings: Settings = Depends(get_settings)):
     if settings.auth_mode == "dev":
         return RedirectResponse("/", status_code=302)
     # CAS 3 sends the browser back to `service` after logging out.
-    return RedirectResponse(cas_client(settings).get_logout_url(redirect_url=settings.app_base_url), status_code=302)
+    logout_url = cas_client(settings, request).get_logout_url(redirect_url=base_url(settings, request))
+    return RedirectResponse(logout_url, status_code=302)

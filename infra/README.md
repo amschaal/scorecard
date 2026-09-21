@@ -1,166 +1,147 @@
 # infra — AWS CDK (Python)
 
-Deploys the hpcusage container to **AWS App Runner**, wired to an **existing RDS PostgreSQL**
-instance through a VPC connector. TLS is App Runner's (ACM-managed) — no certbot.
+Deploys the hpcusage container to **AWS App Runner**, wired through a VPC connector to an
+**RDS PostgreSQL** instance — either one you already have (`database: existing`) or a
+**db.t4g.micro the base stack creates** for this project (`database: create`). TLS is App
+Runner's (ACM-managed).
 
-Two stacks (`ENV_NAME`, default `prod`):
+| Stack | Contents |
+|---|---|
+| `HpcUsage-prod-base` | VPC connector, ECR repository (+ an IAM user that can only push to it), Secrets Manager secrets, instance role; with `database: create` also the RDS instance, its subnet group, master-password secret and security groups |
+| `HpcUsage-prod` | App Runner service pulling `<repo>:latest`, auto-deploying on every push |
 
-| Stack | Contents | Target |
-|---|---|---|
-| `HpcUsage-prod-base` | VPC connector, ECR repository + the IAM user that may push to it, Secrets Manager secrets, instance role | `make deploy-base` |
-| `HpcUsage-prod` | App Runner service pulling `<repo>:latest` with auto-deploy | `make deploy-app` |
+Two stacks because App Runner needs the image to exist when the service is created.
 
-## How deployment works: audit, then run
+## Commands
 
-CDK is used only to *write* CloudFormation. `make synth` runs offline — no credentials, no context
-lookups, no assets — and leaves two plain templates in `infra/cdk.out/`. You read them, then the
-deploy targets send **those files, unchanged** (they never re-synthesize, and print each file's
-SHA-256 so you can match it to what you reviewed) to CloudFormation with your own credentials.
-There is no CDK bootstrap: no `CDKToolkit` stack, bucket or roles exist in the account, and the
-templates carry no CDK metadata, bootstrap-version rule, account id or region.
+Prerequisites on your machine: the AWS CLI, the CDK CLI (`npm install -g aws-cdk`), Docker, and the
+Python CDK libraries: `pip install -r infra/requirements.txt` (in a venv if you like; `infra/.venv/`
+is gitignored). The CLI must be at least as new as the library — if `cdk synth` complains about a
+"cloud assembly schema version mismatch", run `npm install -g aws-cdk@latest`. Each target is the
+plain command it names, run in `infra/`:
 
-Everything the stacks create is named `hpcusage-*` (IAM principals under path `/hpcusage/`), and
-they reference only two things they don't own, both read-only: the subnets and the security group
-you created for them. Anything that touches shared resources is a one-time step you do by hand:
-the connector security group and its rule into the database, the access key for the push user,
-the custom-domain association, campus DNS, and the CAS service registration.
+| | runs |
+|---|---|
+| `make synth` | `cdk synth --all` → `infra/cdk.out/HpcUsage-prod-base.template.json`, `HpcUsage-prod.template.json` |
+| `make diff` | `cdk diff --all` — what a deploy would change in the account |
+| `make deploy` | `cdk deploy --all` — shows IAM / security-group changes and asks before applying them |
+| `make push` | `aws ecr get-login-password \| docker login`, `docker build`, `docker push` ([scripts/push.sh](../scripts/push.sh)) |
+| `make bootstrap` | `cdk bootstrap` — once per account/region |
 
-After that, the only identity that ever talks to AWS on a routine basis is the **push user**, whose
-policy (in the base template) allows the five ECR actions `docker push` needs on that one repository
-ARN, plus `ecr:GetAuthorizationToken` (the login token; it has no resource). A code change is
-`make push`; App Runner notices the new `:latest` and rolls it out.
+`STACKS=HpcUsage-prod-base` limits synth/diff/deploy to one stack. Your normal AWS credentials
+apply (`AWS_PROFILE`, `AWS_REGION`; default region `us-west-2`). `cdk synth` needs no credentials,
+so you can always review the templates before deploying; they carry no CDK metadata
+(`versionReporting`/`pathMetadata` are off in `cdk.json`).
 
-## Tooling: CDK and the AWS CLI run in a container
+## Setup
 
-Nothing CDK- or AWS-related is installed on the host. `infra/Dockerfile` builds a toolbox with the
-CDK CLI, the Python CDK libraries and the AWS CLI v2; `docker-compose.yml` runs it as the `cdk`
-service (profile `cdk`, so `make up` never starts it) with:
+Pick two or more subnets in different AZs **with a route to the internet** (NAT or IGW) — App
+Runner sends all egress through the connector, including the CAS validation call — and put them
+in `subnet_ids`. Then choose where the database comes from:
 
-* the repo mounted at `/workspace` (cwd `infra/`),
-* the external Docker volume `hpcusage-cdk-aws` mounted at `/root/.aws`, holding the push user's
-  key — outside the repo and your `~/.aws`, never removed by `docker compose down -v`. Set
-  `AWS_CONFIG_DIR=~/.aws` to use your own credentials instead (the deploy targets and the one-time
-  scripts need that). `AWS_PROFILE` / `AWS_REGION` are passed through (defaults `default` /
-  `us-west-2`), plus `AWS_ACCESS_KEY_ID`-style variables if set in your shell.
+### `database: create` — the stack's own db.t4g.micro
 
-No Docker socket is mounted. `make push` runs `docker build`/`docker push` on the host and only
-fetches the ECR login password through the container.
+Set `vpc_id` to the subnets' VPC. The base stack creates, in that VPC:
+
+* the connector security group `hpcusage-prod-connector` (egress only) — or uses
+  `connector_security_group_id` if you set one;
+* `hpcusage-prod-db`, a security group whose only ingress is TCP 5432 from the connector group;
+* a single-AZ PostgreSQL 16 `db.t4g.micro` (`db_instance_class` to change it) in `subnet_ids`,
+  20 GB gp3 autoscaling to 100 GB, encrypted, 7-day backups, not publicly accessible, deletion
+  protection on, snapshot on stack deletion;
+* `hpcusage/prod/database-master`, a generated master password (32 alphanumeric characters), and
+  fills `hpcusage/prod/database-url` with the connection string. Nothing to type in.
+
+The subnets need not be public: App Runner reaches the instance over the connector's private
+addresses. `scripts/set_secrets.sh` notices the stack-made database and only writes the tokens.
 
 ```bash
-make cdk-build                  # build the toolbox image (again after changing infra/Dockerfile or requirements.txt)
-make cdk-shell                  # interactive: aws ..., cdk ..., ../scripts/*.sh
+aws ec2 describe-subnets --subnet-ids subnet-a subnet-b --query 'Subnets[].[SubnetId,VpcId,AvailabilityZone]' --output table
 ```
 
-If you use AWS SSO, run `aws sso login --profile <name>` on the host first; the container reads the
-cached token from `~/.aws`. On Linux hosts the container runs as root, so files it writes into the
-bind mount (`infra/cdk.out`) will be root-owned.
+### `database: existing` — a database you already run (the default)
 
-## One-time setup: networking, by hand
-
-Find the RDS network:
+**Network (by hand, in the RDS VPC).** Create a security group for the connector, e.g.
+`hpcusage-prod-connector` (default allow-all egress, no ingress), and allow it into the database:
+on the RDS instance's security group add TCP 5432 with that group as the source. The subnets
+must be in the same VPC (they can be the instance's own).
 
 ```bash
 aws rds describe-db-instances --db-instance-identifier <id> \
-  --query 'DBInstances[0].{vpc:DBSubnetGroup.VpcId,subnets:DBSubnetGroup.Subnets[].SubnetIdentifier,sgs:VpcSecurityGroups[].VpcSecurityGroupId,public:PubliclyAccessible}'
+  --query 'DBInstances[0].{vpc:DBSubnetGroup.VpcId,subnets:DBSubnetGroup.Subnets[].SubnetIdentifier,sgs:VpcSecurityGroups[].VpcSecurityGroupId}'
 ```
 
-Then, in that VPC:
+**cdk.json.** Set `connector_security_group_id`, `subnet_ids`, `clusters`. In this mode
+the stacks never create or modify a security group, and `scripts/set_secrets.sh` asks you for the
+`DATABASE_URL`.
 
-1. Create a security group for the connector, e.g. `hpcusage-prod-connector` (default egress is
-   allow-all, which App Runner needs; no ingress).
-2. Allow it into the database: on the RDS instance's security group, add TCP 5432 with that group
-   as the source.
-3. Pick **two or more subnets in different AZs that have a route to the internet** (NAT or IGW) —
-   App Runner sends *all* egress through the connector, including CAS validation.
+### Hostname and CAS
 
-Put the results in `cdk.json`: `connector_security_group_id`, `subnet_ids`, plus `domain` and
-`clusters`. The stacks never create, modify or delete a security group.
-
-## Synthesize and review
-
-```bash
-make synth                      # infra/cdk.out/HpcUsage-prod-base.template.json and HpcUsage-prod.template.json
-```
-
-What to expect in the base template: `AWS::AppRunner::VpcConnector` (your subnets and group),
-`AWS::ECR::Repository` with a 20-image lifecycle rule, `AWS::IAM::User` `hpcusage-prod-pusher` with
-one `AWS::IAM::Policy`, three `AWS::SecretsManager::Secret`s (`hpcusage/prod/*`, placeholders except
-the generated session secret), the instance role with an inline read policy on those secrets, and
-exports for the app stack. In the app template: the ECR access role, `AWS::AppRunner::Service`
-`hpcusage-prod`, and outputs. Nothing else. `cdk.out/` is gitignored; commit the reviewed templates
-if you want the audited artifact in history.
-
-`make diff` compares the synthesized templates with the deployed stacks (uses your credentials;
-CDK warns that it cannot assume a bootstrap role and continues with them).
-
-## Deploy (your credentials)
-
-```bash
-AWS_CONFIG_DIR=~/.aws make deploy-base
-AWS_CONFIG_DIR=~/.aws make deploy-app       # after the image is pushed and the secrets are set
-```
-
-Each runs `aws cloudformation deploy --template-file cdk.out/<stack>.template.json` with
-`CAPABILITY_NAMED_IAM` (the push user is named). App Runner's two service-linked roles
-(`AWSServiceRoleForAppRunner`, `AWSServiceRoleForAppRunnerNetworking`) are created on first use by
-whoever deploys, i.e. you.
-
-## The push user
-
-Created by the base stack (`PushUser` output). Give it a key once, and store the key in the toolbox
-volume, not in the repo or your `~/.aws`:
-
-```bash
-AWS_CONFIG_DIR=~/.aws make cdk-shell
-  aws iam create-access-key --user-name hpcusage-prod-pusher   # secret shown once
-  exit
-make cdk-shell                                # /root/.aws is now the volume
-  aws configure                               # paste the key; region us-west-2; output json
-  aws sts get-caller-identity                 # arn:aws:iam::<account>:user/hpcusage/hpcusage-prod-pusher
-```
-
-Rotate with `aws iam create-access-key` / `delete-access-key` (max two keys per user).
-`docker volume rm hpcusage-cdk-aws` wipes the stored key. `make push` derives the repository URI
-from the key's own account id, so the user needs no permission beyond its policy.
+`domain` may stay empty to begin with: the service is then reached over HTTPS at its App Runner
+hostname (`https://<id>.<region>.awsapprunner.com`, the `ServiceUrl` output, with an
+Amazon-managed certificate) and the app builds the CAS service URL from that hostname. `cas_base`
+starts at IET's development CAS (`https://ssodev.ucdavis.edu/cas`), which needs no service
+registration; switch to `https://cas.ucdavis.edu/cas` when you register the app. Moving to a campus
+name later is a separate step (see below) — nothing else changes.
 
 ## First deployment
 
 ```bash
-make synth                                  # then review infra/cdk.out/*.template.json
-AWS_CONFIG_DIR=~/.aws make deploy-base
-AWS_CONFIG_DIR=~/.aws make cdk-shell
-  aws iam create-access-key --user-name hpcusage-prod-pusher   # -> volume, see above
-  ../scripts/set_secrets.sh prod            # DATABASE_URL + collector tokens (prints the tokens)
-  exit
-make push                                   # host builds linux/amd64 image, pushes :latest and :<git sha>
-AWS_CONFIG_DIR=~/.aws make deploy-app       # refuses while DATABASE_URL is the placeholder
-AWS_CONFIG_DIR=~/.aws make cdk-shell
-  ../scripts/associate_domain.sh prod       # associates the hostname, prints the CNAMEs for campus DNS
+make bootstrap                              # once per account/region
+make synth                                  # review infra/cdk.out/*.template.json
+make deploy STACKS=HpcUsage-prod-base       # ~10 min more with database=create (RDS)
+scripts/set_secrets.sh prod                 # collector tokens (+ DATABASE_URL with database=existing)
+make push
+make deploy                                 # HpcUsage-prod (App Runner service); prints ServiceUrl
 ```
 
-Then register `https://<domain>/auth/callback` as a CAS service with IET.
-`scripts/domain_records.sh prod` reprints the DNS records and certificate status any time.
+Open the `ServiceUrl` and log in through the development CAS.
+
+## Moving to a campus name
+
+1. Set `domain` (e.g. `hpcusage.ucdavis.edu`) in `cdk.json` and `make deploy` — this only sets
+   `APP_BASE_URL` on the service, so logins use the new name once DNS points at it.
+2. `scripts/associate_domain.sh prod` associates the name with the service and prints the records
+   for campus DNS: a CNAME for the hostname to the App Runner DNS target, plus ACM validation
+   CNAMEs (App Runner issues the certificate once those exist; `scripts/domain_records.sh prod`
+   reprints them and the status any time).
+3. Register `https://<domain>/auth/callback` as a CAS service with IET, then set `cas_base` to
+   `https://cas.ucdavis.edu/cas` and `make deploy`.
+
+The App Runner hostname keeps working alongside the custom domain.
 
 ## Updates
 
-* **Code change** → `make push`. App Runner watches `:latest` and rolls a new deployment
-  (migrations run at container start under an advisory lock). Each push is also tagged with the
-  git SHA so you can roll back by retagging.
-* **Infra change** → `make synth`, review the template (or `make diff`), then
-  `AWS_CONFIG_DIR=~/.aws make deploy-base` / `deploy-app` as appropriate.
-* **Secret change** → `scripts/set_secrets.sh`, then `aws apprunner start-deployment --service-arn ...`
+* **Code** → `make push`. App Runner rolls out the new `:latest` (migrations run at container
+  start under an advisory lock).
+* **Infra** → `make synth` (or `make diff`), review, `make deploy`.
+* **Secrets** → `scripts/set_secrets.sh`, then `aws apprunner start-deployment --service-arn ...`
   (the script prints the command).
 
 On Apple Silicon the image is cross-built for `linux/amd64` (App Runner is x86-only) via Docker
-Desktop's buildx emulation, so expect the first build to take a few minutes.
+Desktop's buildx emulation; the first build takes a few minutes.
+
+## Pushing from somewhere else
+
+The base stack creates `hpcusage-prod-pusher`, an IAM user whose only permissions are the ECR
+actions `docker push` needs on this repository. For CI or a colleague: `aws iam create-access-key
+--user-name hpcusage-prod-pusher`, put the key in a profile, and run `AWS_PROFILE=<name> make push`.
 
 ## Removing it
 
-Delete the push user's access keys, then the `HpcUsage-prod` and `HpcUsage-prod-base` stacks. The
-ECR repository and the secrets are `RETAIN`ed and need deleting by hand, as do the security group
-and its rule on the database, the DNS records and the CAS registration.
+`cd infra && cdk destroy --all`, then by hand: the ECR repository and the secrets
+(both `RETAIN`ed), the DNS records and the CAS registration. With `database: existing`, also the
+security group and its rule on the database. With `database: create`, first turn off deletion
+protection (`aws rds modify-db-instance --db-instance-identifier hpcusage-prod --no-deletion-protection`);
+the destroy then takes a final snapshot of the instance and leaves it behind.
+
+Switching an existing deployment from `existing` to `create` redeploys the base stack with the
+new instance and overwrites the database-url secret; the data does not move. Dump/restore it
+yourself (`pg_dump` from inside the VPC, using the master secret) or backfill from the clusters.
 
 ## Costs (rough)
 
 App Runner 1 vCPU/2 GB ≈ $25–35/mo if kept warm; scales down to provisioned-container pricing
-(≈ $5/mo) when idle. Secrets Manager ≈ $1.20/mo. RDS is your existing instance.
+(≈ $5/mo) when idle. Secrets Manager ≈ $1.20/mo (+ $0.40 for the master secret with
+`database: create`). The stack's `db.t4g.micro` is ≈ $12/mo plus gp3 storage (≈ $2.30/mo for
+20 GB) and backups; with `database: existing` RDS is whatever you already pay.

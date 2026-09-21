@@ -19,7 +19,7 @@ efficiency / "naughty list", fairshare, node state) behind UC Davis CAS.
 |---|---|
 | [collector/](collector/) | Single stdlib-only Python 3.6+ script run by `scrontab` on each cluster. |
 | [app/hpcusage/](app/hpcusage/) | FastAPI backend: ingest API, rollups, JSON API, server-rendered pages, CAS auth, Alembic migrations. |
-| [infra/](infra/) | AWS CDK (Python): App Runner service + VPC connector to an existing RDS instance. |
+| [infra/](infra/) | AWS CDK (Python): App Runner service + VPC connector to RDS (an existing instance, or a db.t4g.micro the stack creates). |
 | [scripts/](scripts/) | Token generation, local seeding, backfill, secrets/DNS helpers. |
 
 ## Quick start (local)
@@ -109,21 +109,22 @@ CAS is handled by the [python-cas](https://github.com/python-cas/python-cas) lib
 (`app/hpcusage/routers/auth.py` only wires it to routes and the session cookie). `/auth/login` redirects
 to `${CAS_BASE}/login?service=${APP_BASE_URL}/auth/callback?next=...`; the callback validates the
 ticket (`CAS_VERSION=3` → `/p3/serviceValidate`, which also returns attributes) and stores the username
-in a signed cookie. The `service` URL must be registered with IET; `APP_BASE_URL` must be exactly the
-public hostname. Restrict access later by setting `ALLOWED_USERS` (or extending `hpcusage/authz.py`).
-Locally, `AUTH_MODE=dev` logs everyone in as `DEV_USER`.
+in a signed cookie. `APP_BASE_URL` must be exactly the public hostname; left empty, the app uses the
+scheme and host each request arrived on (fine behind App Runner, which terminates TLS and forwards
+the headers). The `service` URL must be registered with IET for the production CAS; the development
+CAS (`CAS_BASE=https://ssodev.ucdavis.edu/cas`) accepts unregistered services. Restrict access later
+by setting `ALLOWED_USERS` (or extending `hpcusage/authz.py`). Locally, `AUTH_MODE=dev` logs everyone
+in as `DEV_USER`.
 
 ## Deploying to AWS
 
-See [infra/README.md](infra/README.md). CDK and the AWS CLI run in an isolated container with no
-Docker socket. Deployment is audit-then-run: `make synth` writes plain CloudFormation to
-`infra/cdk.out/` offline, you review it, and `make deploy-base` / `make deploy-app` send those exact
-files to CloudFormation with your own credentials (there is no CDK bootstrap). The only routine AWS
-identity is a push user that can do nothing but push the image to the project's ECR repository;
-`make push` builds on the host and App Runner auto-deploys `:latest`. Networking (a security group
-and its rule into RDS), the custom domain, campus DNS and the CAS registration are one-time manual
-steps, in that order: `make synth`, `make deploy-base`, `scripts/set_secrets.sh`, `make push`,
-`make deploy-app`, `scripts/associate_domain.sh`.
+See [infra/README.md](infra/README.md). `make synth` writes the CloudFormation templates to
+`infra/cdk.out/` for review, `make deploy` runs `cdk deploy`, and `make push` builds the image and
+pushes it to ECR, which App Runner auto-deploys. With `database=create` the stack also creates
+its own db.t4g.micro and wires the security groups; with an existing instance, the connector
+security group and its rule into RDS are yours to make. The service starts out on its App Runner
+hostname (HTTPS included); the custom domain, campus DNS and the CAS registration are one-time
+manual steps you can take later.
 
 ## Hosting on-prem instead
 

@@ -12,7 +12,9 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     database_url: str = "postgresql+psycopg://hpcusage:hpcusage@localhost:5432/hpcusage"
-    app_base_url: str = "http://localhost:8000"
+    # Empty = use each request's own scheme/host (as forwarded by App Runner). Set it once the app
+    # has a fixed public hostname: CAS wants the service URL byte-identical at login and validation.
+    app_base_url: str = ""
     session_secret: str = "dev-only-change-me"
     session_max_age_s: int = 12 * 3600
 
@@ -60,7 +62,8 @@ class Settings(BaseSettings):
 
     @property
     def is_https(self) -> bool:
-        return self.app_base_url.startswith("https://")
+        # Unset means "behind App Runner", which always terminates TLS.
+        return not self.app_base_url.startswith("http://")
 
 
 @lru_cache

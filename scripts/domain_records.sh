@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Print the DNS records campus DNS must create for the App Runner custom domain.
-# Run inside `make cdk-shell`: scripts/domain_records.sh [env-name] [aws-profile]
+# Usage: scripts/domain_records.sh [env-name] [aws-profile]
 set -euo pipefail
 ENV_NAME=${1:-prod}; PROFILE=${2:-}
 AWSP=(aws); [[ -n "$PROFILE" ]] && AWSP+=(--profile "$PROFILE")
