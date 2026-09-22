@@ -13,7 +13,11 @@ from stacks.hpcusage_stack import HpcUsageAppStack, HpcUsageBaseStack
 
 app = cdk.App()
 env_name = app.node.try_get_context("env_name") or "prod"
-base = HpcUsageBaseStack(app, f"HpcUsage-{env_name}-base",
+# Pin the region: App Runner is not offered everywhere (us-west-1 for one), and the VPC/subnets in
+# cdk.json only exist in one region. The account still comes from the credentials in use.
+env = cdk.Environment(region=app.node.try_get_context("region") or "us-west-2")
+base = HpcUsageBaseStack(app, f"HpcUsage-{env_name}-base", env=env,
                          description="hpcusage: VPC connector, ECR repository + push user, secrets")
-HpcUsageAppStack(app, f"HpcUsage-{env_name}", base=base, description="hpcusage: App Runner service")
+HpcUsageAppStack(app, f"HpcUsage-{env_name}", base=base, env=env,
+                 description="hpcusage: App Runner service")
 app.synth()

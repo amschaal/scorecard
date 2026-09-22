@@ -5,6 +5,8 @@
 # and writes COLLECTOR_TOKENS from freshly generated tokens, one per cluster in $CLUSTERS
 # (comma-separated, default "hive").
 set -euo pipefail
+export AWS_REGION=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["context"].get("region", "us-west-2"))' \
+                    "$(dirname "$0")/../infra/cdk.json")  # same region as the stacks
 ENV_NAME=${1:-prod}
 PROFILE=${2:-}
 STACK_BASE="HpcUsage-${ENV_NAME}-base"

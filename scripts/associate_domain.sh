@@ -4,6 +4,7 @@
 # Usage:
 #   scripts/associate_domain.sh [env-name] [domain]     # domain defaults to `domain` in infra/cdk.json
 set -euo pipefail
+export AWS_REGION=$(jq -r '.context.region // "us-west-2"' "$(dirname "$0")/../infra/cdk.json")  # same region as the stacks
 ENV_NAME=${1:-prod}
 DOMAIN=${2:-$(jq -r '.context.domain // empty' "$(dirname "$0")/../infra/cdk.json")}
 [[ -n "$DOMAIN" ]] || { echo "no domain: set 'domain' in infra/cdk.json (and make deploy) or pass it as the 2nd argument" >&2; exit 1; }

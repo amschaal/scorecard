@@ -12,9 +12,10 @@
     "@aws-cdk/aws-iam:minimizePolicies": true,
 
     "env_name": "prod",
-    "subnet_ids": "subnet-05f7192a9d2784abb,subnet-02f12b113b1931317",
+    "region": "us-west-2",
+    "subnet_ids": "subnet-1b525d41,subnet-cbaa2de0",
     "database": "create",
-    "vpc_id": "vpc-0d7a5cfbb73085d2d",
+    "vpc_id": "vpc-1112b269",
     "db_instance_class": "db.t4g.micro",
     "domain": "",
     "cas_base": "https://ssodev.ucdavis.edu/cas",

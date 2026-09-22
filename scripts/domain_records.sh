@@ -2,6 +2,8 @@
 # Print the DNS records campus DNS must create for the App Runner custom domain.
 # Usage: scripts/domain_records.sh [env-name] [aws-profile]
 set -euo pipefail
+export AWS_REGION=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["context"].get("region", "us-west-2"))' \
+                    "$(dirname "$0")/../infra/cdk.json")  # same region as the stacks
 ENV_NAME=${1:-prod}; PROFILE=${2:-}
 AWSP=(aws); [[ -n "$PROFILE" ]] && AWSP+=(--profile "$PROFILE")
 ARN=$("${AWSP[@]}" cloudformation describe-stacks --stack-name "HpcUsage-${ENV_NAME}" \

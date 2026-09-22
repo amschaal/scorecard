@@ -29,7 +29,9 @@ plain command it names, run in `infra/`:
 | `make bootstrap` | `cdk bootstrap` — once per account/region |
 
 `STACKS=HpcUsage-prod-base` limits synth/diff/deploy to one stack. Your normal AWS credentials
-apply (`AWS_PROFILE`, `AWS_REGION`; default region `us-west-2`). `cdk synth` needs no credentials,
+apply (`AWS_PROFILE`); the region is the `region` context key in `cdk.json` (`us-west-2`), not
+`AWS_REGION`, because App Runner is not available in every region (not in `us-west-1`) and the
+VPC/subnets below must be in the same region as the service. `cdk synth` needs no credentials,
 so you can always review the templates before deploying; they carry no CDK metadata
 (`versionReporting`/`pathMetadata` are off in `cdk.json`).
 
@@ -91,9 +93,12 @@ make bootstrap                              # once per account/region
 make synth                                  # review infra/cdk.out/*.template.json
 make deploy STACKS=HpcUsage-prod-base       # ~10 min more with database=create (RDS)
 scripts/set_secrets.sh prod                 # collector tokens (+ DATABASE_URL with database=existing)
-make push
+make push                                   # the service cannot be created until :latest exists
 make deploy                                 # HpcUsage-prod (App Runner service); prints ServiceUrl
 ```
+
+`make deploy` with `--all` before `make push` fails with "Your service failed to create": App Runner
+has no image to pull. Push, then deploy again — the failed stack rolls back on its own.
 
 Open the `ServiceUrl` and log in through the development CAS.
 
