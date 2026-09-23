@@ -1,9 +1,11 @@
 """Jinja2 environment + filters shared by page routers."""
 
 import os
-from datetime import datetime
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi.templating import Jinja2Templates
+from jinja2 import pass_context
 
 from . import __version__
 
@@ -53,7 +55,19 @@ def fmt_mb(mb) -> str:
     return f"{mb:.0f} MB"
 
 
-def fmt_ts(v) -> str:
+def _zone(name: str | None):
+    if not name:
+        return None
+    try:
+        return ZoneInfo(name)
+    except (KeyError, ValueError):
+        return None
+
+
+@pass_context
+def fmt_ts(ctx, v, tz: str | None = None) -> str:
+    """Render an aware timestamp in local time: the `tz` argument if given (per-row, e.g. an ingest
+    row's cluster), else the page's `tz` (its cluster's zone). Timestamps are stored in UTC."""
     if not v:
         return "–"
     if isinstance(v, str):
@@ -61,6 +75,11 @@ def fmt_ts(v) -> str:
             v = datetime.fromisoformat(v)
         except ValueError:
             return v
+    zone = _zone(tz) or _zone(ctx.get("tz"))
+    if zone is not None:
+        if v.tzinfo is None:
+            v = v.replace(tzinfo=timezone.utc)
+        v = v.astimezone(zone)
     return v.strftime("%Y-%m-%d %H:%M")
 
 

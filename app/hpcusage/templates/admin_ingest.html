@@ -1,14 +1,14 @@
 {% extends "base.html" %}
 {% block title %}Ingest status · hpcusage{% endblock %}
-{% block head %}<div class="page-head"><h1>Ingest status</h1><span class="sub">what the collectors have uploaded</span></div>{% endblock %}
+{% block head %}<div class="page-head"><h1>Ingest status</h1><span class="sub">what the collectors have uploaded · times in each cluster's local zone</span></div>{% endblock %}
 {% block content %}
 {% if status|selectattr('stale')|list %}<div class="notice">One or more collectors look stale (no successful upload in 36 h). Check <code>scrontab -l</code> and <code>~/.hpcusage/collect-*.log</code> on the cluster.</div>{% endif %}
 <div class="grid">
   <div class="card col-12"><h2>Latest per cluster and kind</h2>
     <table class="data"><tr><th>Cluster</th><th>Kind</th><th>Received</th><th>Window / snapshot</th><th class="num">Received</th><th class="num">Inserted</th><th class="num">Updated</th><th class="num">ms</th><th>Collector</th><th>Slurm</th><th>Status</th></tr>
     {% for s in status %}
-    <tr><td>{{ s.cluster }}</td><td>{{ s.kind }}</td><td class="muted">{{ s.received_at|ts }} ({{ s.age_hours|num }} h ago)</td>
-      <td class="muted">{% if s.window_start %}{{ s.window_start|ts }} → {{ s.window_end|ts }}{% else %}{{ s.taken_at|ts }}{% endif %}</td>
+    <tr><td>{{ s.cluster }}</td><td>{{ s.kind }}</td><td class="muted">{{ s.received_at|ts(s.timezone) }} ({{ s.age_hours|num }} h ago)</td>
+      <td class="muted">{% if s.window_start %}{{ s.window_start|ts(s.timezone) }} → {{ s.window_end|ts(s.timezone) }}{% else %}{{ s.taken_at|ts(s.timezone) }}{% endif %}</td>
       <td class="num">{{ s.rows_received|num }}</td><td class="num">{{ s.rows_inserted|num }}</td><td class="num">{{ s.rows_updated|num }}</td><td class="num">{{ s.duration_ms|num }}</td>
       <td class="muted">{{ s.collector_version or '' }}</td><td class="muted">{{ s.slurm_version or '' }}</td>
       <td>{% if s.status != 'ok' %}<span class="badge bad">{{ s.status }}</span> <span class="muted">{{ (s.error or '')[:120] }}</span>{% elif s.stale %}<span class="badge warn">stale</span>{% else %}<span class="badge good">ok</span>{% endif %}</td></tr>
@@ -16,8 +16,8 @@
   <div class="card col-12"><h2>Recent batches</h2>
     <div class="scroll"><table class="data"><tr><th>ID</th><th>Cluster</th><th>Kind</th><th>Received</th><th>Window</th><th class="num">Rows</th><th class="num">Ins</th><th class="num">Upd</th><th class="num">ms</th><th>Status</th></tr>
     {% for b in recent %}
-    <tr><td class="mono">{{ b.id }}</td><td>{{ b.cluster }}</td><td>{{ b.kind }}</td><td class="muted">{{ b.received_at|ts }}</td>
-      <td class="muted">{% if b.window_start %}{{ b.window_start|ts }} → {{ b.window_end|ts }}{% endif %}</td>
+    <tr><td class="mono">{{ b.id }}</td><td>{{ b.cluster }}</td><td>{{ b.kind }}</td><td class="muted">{{ b.received_at|ts(b.timezone) }}</td>
+      <td class="muted">{% if b.window_start %}{{ b.window_start|ts(b.timezone) }} → {{ b.window_end|ts(b.timezone) }}{% endif %}</td>
       <td class="num">{{ b.rows_received|num }}</td><td class="num">{{ b.rows_inserted|num }}</td><td class="num">{{ b.rows_updated|num }}</td><td class="num">{{ b.duration_ms|num }}</td>
       <td>{% if b.status == 'ok' %}<span class="badge good">ok</span>{% else %}<span class="badge bad">{{ b.status }}</span> <span class="muted">{{ (b.error or '')[:200] }}</span>{% endif %}</td></tr>
     {% endfor %}</table></div></div>

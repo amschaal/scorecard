@@ -22,12 +22,17 @@ router = APIRouter(tags=["pages"], include_in_schema=False)
 def ctx(request: Request, db: Session, user: str, cluster: Cluster | None = None, from_=None, to=None,
         default_days: int = 30, **extra) -> dict:
     start, end = parse_window(from_, to, default_days)
+    clusters = list_clusters(db)
+    # Timestamps are stored in UTC and shown in the cluster's zone (the `ts` filter). Pages that
+    # are not about one cluster use the first cluster's zone; ingest rows carry their own.
+    tz = cluster.timezone if cluster else (clusters[0].timezone if clusters else None)
     return {
         "request": request,
         "user": user,
         "display_name": request.session.get("display_name") if hasattr(request, "session") else None,
-        "clusters": list_clusters(db),
+        "clusters": clusters,
         "cluster": cluster,
+        "tz": tz,
         "window": {"from": start.isoformat(), "to": (end - timedelta(days=1)).isoformat(),
                    "days": (end - start).days},
         "metrics": METRICS,

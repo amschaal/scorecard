@@ -44,7 +44,7 @@
 (async () => {
   const s = await HU.getJSON('/api/v1/fairshare', {cluster: "{{ cluster.name }}", from: "{{ window.from }}", to: "{{ window.to }}", account: "{{ account }}", user: "{{ fs_user }}"});
   if (!s) return;
-  HU.onRender(() => HU.lines(document.getElementById('trend'), s.t, [
+  HU.onRender(() => HU.lines(document.getElementById('trend'), s.t_local, [
     {name: 'FairShare', values: s.fairshare}, {name: 'Norm usage', values: s.norm_usage}, {name: 'Norm shares', values: s.norm_shares},
   ], {digits: 4, yRange: [0, 1.05]}));
 })().catch(e => console.error(e));

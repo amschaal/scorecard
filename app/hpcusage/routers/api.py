@@ -80,7 +80,7 @@ def wait_times(cluster: Cluster = Depends(get_cluster), window=Depends(_window),
 def fairshare(cluster: Cluster = Depends(get_cluster), window=Depends(_window), account: str | None = None,
               user: str | None = None, db: Session = Depends(get_db)):
     if account:
-        return snap_q.fairshare_series(db, cluster.id, *window, account=account, user=user)
+        return snap_q.fairshare_series(db, cluster.id, *window, account=account, user=user, tz=cluster.timezone)
     return snap_q.fairshare_latest(db, cluster.id)
 
 

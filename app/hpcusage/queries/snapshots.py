@@ -2,6 +2,7 @@
 
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -24,7 +25,10 @@ def fairshare_latest(db: Session, cluster_id: int) -> dict:
 
 
 def fairshare_series(db: Session, cluster_id: int, start: date, end: date, account: str,
-                     user: str | None = None) -> dict:
+                     user: str | None = None, tz: str = "UTC") -> dict:
+    """`t` is ISO-8601 with offset (for API consumers); `t_local` is the same instant in the
+    cluster's zone without an offset, which Plotly plots as-is instead of converting to UTC."""
+    zone = ZoneInfo(tz)
     user_clause = "AND user_name = :user" if user else "AND user_name IS NULL"
     rows = db.execute(text(f"""
         SELECT taken_at, fairshare, norm_usage, effective_usage, norm_shares, level_fs
@@ -36,6 +40,7 @@ def fairshare_series(db: Session, cluster_id: int, start: date, end: date, accou
     return {
         "account": account, "user": user,
         "t": [r["taken_at"].isoformat() for r in rows],
+        "t_local": [r["taken_at"].astimezone(zone).strftime("%Y-%m-%d %H:%M:%S") for r in rows],
         "fairshare": [r["fairshare"] for r in rows],
         "norm_usage": [r["norm_usage"] for r in rows],
         "effective_usage": [r["effective_usage"] for r in rows],
@@ -93,7 +98,7 @@ def partitions_latest(db: Session, cluster_id: int) -> list[dict]:
 def ingest_status(db: Session, stale_after_hours: int = 36) -> list[dict]:
     rows = db.execute(text("""
         SELECT DISTINCT ON (c.name, b.kind)
-               c.name AS cluster, b.kind, b.id, b.received_at, b.window_start, b.window_end, b.taken_at,
+               c.name AS cluster, c.timezone, b.kind, b.id, b.received_at, b.window_start, b.window_end, b.taken_at,
                b.rows_received, b.rows_inserted, b.rows_updated, b.status, b.error, b.duration_ms,
                b.collector_version, b.slurm_version
         FROM ingest_batches b JOIN clusters c ON c.id = b.cluster_id
@@ -112,7 +117,7 @@ def ingest_status(db: Session, stale_after_hours: int = 36) -> list[dict]:
 
 def recent_batches(db: Session, limit: int = 50) -> list[dict]:
     rows = db.execute(text("""
-        SELECT c.name AS cluster, b.kind, b.id, b.received_at, b.window_start, b.window_end,
+        SELECT c.name AS cluster, c.timezone, b.kind, b.id, b.received_at, b.window_start, b.window_end,
                b.rows_received, b.rows_inserted, b.rows_updated, b.status, b.error, b.duration_ms
         FROM ingest_batches b JOIN clusters c ON c.id = b.cluster_id
         ORDER BY b.received_at DESC LIMIT :limit
