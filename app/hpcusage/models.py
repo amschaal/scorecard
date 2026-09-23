@@ -14,6 +14,19 @@ class Base(DeclarativeBase):
     pass
 
 
+# Queue-wait histogram buckets, one daily_partition_util column each: (column, label, lo_s, hi_s).
+# A job counts in the bucket with lo <= wait_s < hi (hi None = unbounded) on the day it STARTED, like
+# wait_p50_s/wait_p90_s. Changing the edges needs a migration that recomputes the rollup.
+WAIT_BUCKETS = [
+    ("wait_lt_1m", "< 1 min", 0, 60),
+    ("wait_1m_10m", "1–10 min", 60, 600),
+    ("wait_10m_1h", "10–60 min", 600, 3600),
+    ("wait_1h_6h", "1–6 h", 3600, 21600),
+    ("wait_6h_1d", "6–24 h", 21600, 86400),
+    ("wait_gt_1d", "> 1 day", 86400, None),
+]
+
+
 class Cluster(Base):
     __tablename__ = "clusters"
 
@@ -173,6 +186,13 @@ class DailyPartitionUtil(Base):
     wait_p50_s: Mapped[float | None] = mapped_column(Float)
     wait_p90_s: Mapped[float | None] = mapped_column(Float)
     wait_mean_s: Mapped[float | None] = mapped_column(Float)
+    # Jobs started that day by time in queue; see WAIT_BUCKETS.
+    wait_lt_1m: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    wait_1m_10m: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    wait_10m_1h: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    wait_1h_6h: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    wait_6h_1d: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    wait_gt_1d: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
 
 
 class NodeSnapshot(Base):

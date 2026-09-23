@@ -51,6 +51,10 @@ def test_outcomes_efficiency_utilization_wait(seeded):
     assert gpu["avg_pct"] == pytest.approx(100.0 * 48 / (4 * 48))  # 48 GPU-h used of 4 GPUs x 2 days
     wt = seeded.get("/api/v1/wait_times", params=W).json()
     assert wt["histogram"]["buckets"][0] == "< 1 min"
+    # 1001 5 min, 1002 1 h, 1003_7 10 s, 1006+1 0 s, 1007 10 min; served from the rollup, not per-job rows.
+    hist = {s["name"]: s["values"] for s in wt["histogram"]["series"]}
+    assert hist["high"] == [1, 1, 1, 0, 0, 0] and hist["gpu-a100"] == [0, 0, 0, 1, 0, 0] and hist["low"][0] == 1
+    assert sum(sum(v) for v in hist.values()) == 5
 
 
 def test_jobs_and_nodes_and_fairshare(seeded):

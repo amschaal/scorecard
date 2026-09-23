@@ -17,7 +17,7 @@
   <div class="card col-4"><h2>Average over window</h2><div id="util-table"></div></div>
   <div class="card col-6"><h2>Median queue wait <span class="hint">p50 of jobs started that day, hours</span></h2><div class="chart" id="wait-p50"></div></div>
   <div class="card col-6"><h2>90th-percentile queue wait <span class="hint">hours</span></h2><div class="chart" id="wait-p90"></div></div>
-  <div class="card col-12"><h2>Wait-time distribution <span class="hint">jobs by time in queue, per partition (per-job rows only)</span></h2><div class="chart" id="wait-hist"></div></div>
+  <div class="card col-12"><h2>Wait-time distribution <span class="hint">jobs started in the window by time in queue, per partition</span></h2><div class="chart" id="wait-hist"></div></div>
 </div>
 {% endblock %}
 {% block scripts %}

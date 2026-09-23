@@ -78,7 +78,7 @@ their own container) say so and exit if run inside the app container.
    * `daily_usage` — per (day, user, account, partition, qos): job counts by outcome, CPU/GPU/mem/node
      seconds, efficiency sums, wait sums. **Kept forever.**
    * `daily_partition_util` — allocated resource-seconds *split across the calendar days a job ran*,
-     against capacity from the node snapshot; queue-wait p50/p90 for jobs started that day.
+     against capacity from the node snapshot; queue-wait p50/p90 and a wait histogram for jobs started that day.
    Then it purges per-job rows older than `JOB_RETENTION_DAYS` (default 400; rollups stay).
 3. **Pages** are server-rendered; charts fetch `/api/v1/...` JSON (see `/api/docs`).
 

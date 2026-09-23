@@ -12,6 +12,19 @@ from datetime import date
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from ..models import WAIT_BUCKETS
+
+WAIT_BUCKET_COLS = ", ".join(c for c, *_ in WAIT_BUCKETS)
+WAIT_BUCKET_ZEROED = ", ".join(f"coalesce(u.{c}, 0)" for c, *_ in WAIT_BUCKETS)
+
+
+def wait_bucket_filters(prefix: str = "started_today AND ") -> str:
+    """count(*) FILTER (...) AS <col> for each WAIT_BUCKETS entry (comma-separated)."""
+    return ",\n           ".join(
+        f"count(*) FILTER (WHERE {prefix}wait_s >= {lo}{f' AND wait_s < {hi}' if hi is not None else ''}) AS {col}"
+        for col, _, lo, hi in WAIT_BUCKETS
+    )
+
 DAILY_USAGE_SQL = text("""
 INSERT INTO daily_usage (
     cluster_id, day, user_name, account, partition, qos,
@@ -51,7 +64,7 @@ WHERE cluster_id = :cid AND end_day = ANY(:days)
 GROUP BY cluster_id, end_day, user_name, account, partition, qos
 """)
 
-DAILY_PARTITION_UTIL_SQL = text("""
+DAILY_PARTITION_UTIL_SQL = text(f"""
 WITH days AS (
     SELECT unnest(CAST(:days AS date[])) AS day
 ), bounds AS (
@@ -87,7 +100,8 @@ WITH days AS (
                FILTER (WHERE started_today AND wait_s IS NOT NULL) AS wait_p50,
            percentile_cont(0.9) WITHIN GROUP (ORDER BY wait_s)
                FILTER (WHERE started_today AND wait_s IS NOT NULL) AS wait_p90,
-           avg(wait_s) FILTER (WHERE started_today AND wait_s IS NOT NULL) AS wait_mean
+           avg(wait_s) FILTER (WHERE started_today AND wait_s IS NOT NULL) AS wait_mean,
+           {wait_bucket_filters()}
     FROM split
     GROUP BY day, partition
 ), snap AS (
@@ -115,7 +129,7 @@ WITH days AS (
 INSERT INTO daily_partition_util (
     cluster_id, day, partition, cpu_seconds, gpu_seconds, mem_mb_seconds, node_seconds,
     capacity_cpu_seconds, capacity_gpu_seconds, capacity_mem_mb_seconds, capacity_node_seconds,
-    jobs_started, wait_p50_s, wait_p90_s, wait_mean_s
+    jobs_started, wait_p50_s, wait_p90_s, wait_mean_s, {WAIT_BUCKET_COLS}
 )
 SELECT :cid,
        coalesce(u.day, c.day),
@@ -123,7 +137,8 @@ SELECT :cid,
        coalesce(u.cpu_seconds, 0), coalesce(u.gpu_seconds, 0),
        coalesce(u.mem_mb_seconds, 0), coalesce(u.node_seconds, 0),
        c.cap_cpu, c.cap_gpu, c.cap_mem, c.cap_node,
-       coalesce(u.jobs_started, 0), u.wait_p50, u.wait_p90, u.wait_mean
+       coalesce(u.jobs_started, 0), u.wait_p50, u.wait_p90, u.wait_mean,
+       {WAIT_BUCKET_ZEROED}
 FROM usage u
 FULL OUTER JOIN cap c ON c.day = u.day AND c.partition = u.partition
 """)
