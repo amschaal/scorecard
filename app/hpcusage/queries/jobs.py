@@ -1,11 +1,18 @@
 """Per-job browsing (only within the retention window)."""
 
-from datetime import date
+from datetime import date, timedelta
 
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from ..settings import get_settings
+
 SORTABLE = {"end_time", "start_time", "elapsed_s", "alloc_cpus", "cpu_seconds_alloc", "wait_s", "max_rss_mb", "gpus"}
+
+# The collector only ships jobs in a terminal state (TERMINAL_STATES in collector/slurm_collector.py), so
+# the filter dropdown is a constant rather than SELECT DISTINCT over every per-job row.
+JOB_STATES = ["COMPLETED", "FAILED", "TIMEOUT", "CANCELLED", "OUT_OF_MEMORY", "NODE_FAIL", "PREEMPTED",
+              "DEADLINE", "BOOT_FAIL", "REVOKED"]
 
 
 def list_jobs(db: Session, cluster_id: int, start: date, end: date, user: str | None = None,
@@ -13,14 +20,19 @@ def list_jobs(db: Session, cluster_id: int, start: date, end: date, user: str | 
               qos: str | None = None, job_id: str | None = None, min_cpus: int | None = None,
               gpus_only: bool = False, sort: str = "end_time", desc: bool = True,
               limit: int = 100, offset: int = 0, count: bool = True) -> dict:
-    """List matching jobs. `count=False` skips the total (a second scan of every matching row);
-    pages that only show "the latest N" do not need it and the API reports total=None."""
+    """List matching jobs. `count=False` skips the total; pages that only show "the latest N" do not
+    need it and the API reports total=None. When the filters are all rollup dimensions (user, account,
+    partition, qos) the total comes from daily_usage instead of counting every matching per-job row."""
     clauses, params = [], {"cid": cluster_id, "start": start, "end": end}
+    rollup_clauses = []
     for col, val in (("user_name", user), ("account", account), ("partition", partition),
                      ("state", state), ("qos", qos)):
         if val:
             clauses.append(f"AND {col} = :{col}")
             params[col] = val
+            if col != "state":
+                rollup_clauses.append(f"AND {col} = :{col}")
+    rollup_countable = not (state or job_id or min_cpus or gpus_only)
     if job_id:
         clauses.append("AND (job_id = :job_id OR job_id_raw = :job_id OR array_job_id::text = :job_id)")
         params["job_id"] = job_id
@@ -34,14 +46,20 @@ def list_jobs(db: Session, cluster_id: int, start: date, end: date, user: str | 
         sort = "end_time"
     direction = "DESC" if desc else "ASC"
     if sort == "end_time":
-        # Lead with end_day: the (cluster, <filter column>, end_day) btree indexes deliver rows
-        # already ordered by it, so Postgres can incremental-sort within each day and stop after
-        # LIMIT rows instead of sorting every job the user/account ran in the window.
+        # Lead with end_day: ix_jobs_cluster_end_day_end_time delivers the unfiltered listing in this
+        # order directly (a backward index walk that stops after LIMIT rows), and the
+        # (cluster, <filter column>, end_day) indexes let Postgres incremental-sort within each day
+        # instead of sorting every job the user/account ran in the window.
         order = f"end_day {direction}, end_time {direction}"
     else:
         order = f"{sort} {direction} NULLS LAST"
     base = f"FROM jobs WHERE cluster_id = :cid AND end_day >= :start AND end_day < :end {where}"
-    total = db.execute(text(f"SELECT count(*) {base}"), params).scalar() if count else None
+    if not count:
+        total = None
+    elif rollup_countable:
+        total = _rollup_count(db, params, " ".join(rollup_clauses))
+    else:
+        total = db.execute(text(f"SELECT count(*) {base}"), params).scalar()
     rows = db.execute(text(f"""
         SELECT job_id, job_id_raw, user_name, account, partition, qos, job_name, state, exit_code,
                submit_time, start_time, end_time, elapsed_s, timelimit_s, wait_s, alloc_cpus, nnodes,
@@ -63,11 +81,25 @@ def list_jobs(db: Session, cluster_id: int, start: date, end: date, user: str | 
     return {"total": int(total or 0) if count else None, "limit": limit, "offset": offset, "items": items}
 
 
+def _rollup_count(db: Session, params: dict, where: str) -> int:
+    """Jobs in the window per daily_usage, which counts exactly the per-job rows while they exist. Days
+    older than the retention window are left out because their rows have been purged (the boundary is
+    approximate by a day: purge goes by end_time, the rollup by the cluster-local end_day)."""
+    retention = get_settings().job_retention_days
+    start = params["start"]
+    if retention > 0:
+        start = max(start, date.today() - timedelta(days=retention))
+    return db.execute(text(f"""
+        SELECT coalesce(sum(job_count), 0) FROM daily_usage
+        WHERE cluster_id = :cid AND day >= :start AND day < :end {where}
+    """), {**params, "start": start}).scalar()
+
+
 def distinct_values(db: Session, cluster_id: int, col: str) -> list[str]:
-    """Values for filter dropdowns. `state` lives only on per-job rows; the rest come from the rollup."""
+    """Values for filter dropdowns. States are a fixed set; the rest come from the rollup."""
     if col == "state":
-        sql = "SELECT DISTINCT state FROM jobs WHERE cluster_id = :cid ORDER BY 1"
-    elif col in ("partition", "qos", "account"):
+        return list(JOB_STATES)
+    if col in ("partition", "qos", "account"):
         sql = f"SELECT DISTINCT {col} FROM daily_usage WHERE cluster_id = :cid ORDER BY 1"
     else:
         return []

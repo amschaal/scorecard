@@ -110,7 +110,8 @@ class Job(Base):
 
     __table_args__ = (
         UniqueConstraint("cluster_id", "job_id_raw", name="uq_jobs_cluster_jobid"),
-        Index("ix_jobs_cluster_end_day", "cluster_id", "end_day"),
+        # end_time last so the jobs page's default order (end_day, end_time) is an index walk.
+        Index("ix_jobs_cluster_end_day_end_time", "cluster_id", "end_day", "end_time"),
         Index("ix_jobs_cluster_end_time", "cluster_id", "end_time"),
         Index("ix_jobs_cluster_start_time", "cluster_id", "start_time"),
         Index("ix_jobs_cluster_user_end_day", "cluster_id", "user_name", "end_day"),

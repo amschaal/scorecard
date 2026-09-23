@@ -60,6 +60,11 @@ def test_outcomes_efficiency_utilization_wait(seeded):
 def test_jobs_and_nodes_and_fairshare(seeded):
     jobs = seeded.get("/api/v1/jobs", params={**W, "gpus_only": "true"}).json()
     assert jobs["total"] == 1 and jobs["items"][0]["user_name"] == "bob"
+    # Totals for rollup-dimension filters come from daily_usage and must agree with the per-job rows.
+    assert seeded.get("/api/v1/jobs", params=W).json()["total"] == 5
+    by_user = seeded.get("/api/v1/jobs", params={**W, "user": "bob"}).json()
+    assert by_user["total"] == 1 and len(by_user["items"]) == 1
+    assert seeded.get("/api/v1/jobs", params={**W, "partition": "high", "state": "COMPLETED"}).json()["total"] == 2
     nodes = seeded.get("/api/v1/nodes/latest", params={"cluster": "hive"}).json()
     assert nodes["totals"]["nodes"] == 3 and nodes["totals"]["gpus_total"] == 4
     fs = seeded.get("/api/v1/fairshare", params={"cluster": "hive"}).json()
