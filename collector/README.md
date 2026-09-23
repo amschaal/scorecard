@@ -35,7 +35,17 @@ allocation (max `MaxRSS`, summed `NTasks`). Running jobs are collected on the
 day they finish.
 
 Failed uploads are retried three times, then spooled to `~/.hpcusage/spool/`
-and resent on the next run.
+and resent on the next run. To drain the spool without collecting anything new
+(for example after fixing the backend), run:
+
+```
+python3 slurm_collector.py --resend
+```
+
+It re-POSTs each spooled envelope once, oldest first, deletes the ones that
+succeed, and exits 1 if any remain. Job envelopes are upserts and safe to
+resend; node and fairshare envelopes insert a snapshot at their recorded time,
+so resend those only if that snapshot is missing.
 
 ## Tests
 

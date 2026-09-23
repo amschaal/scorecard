@@ -643,8 +643,11 @@ def spool_write(spool_dir, kind, cluster, payload, tag):
 
 
 def spool_resend(spool_dir, url, token):
+    """Re-POST every spooled envelope, oldest first; delete the ones that succeed.
+    Returns (sent, failed)."""
+    sent = failed = 0
     if not os.path.isdir(spool_dir):
-        return
+        return sent, failed
     for name in sorted(os.listdir(spool_dir)):
         if not name.endswith(".json.gz"):
             continue
@@ -655,6 +658,12 @@ def spool_resend(spool_dir, url, token):
         log("resending spooled %s" % name)
         if post_envelope(url, token, kind, payload, retries=1):
             os.remove(path)
+            sent += 1
+        else:
+            failed += 1
+    if sent or failed:
+        log("spool: %d resent, %d still spooled" % (sent, failed))
+    return sent, failed
 
 
 def deliver(env, kind, args, tag):
@@ -750,6 +759,9 @@ def parse_args(argv=None):
     io_.add_argument("--dry-run", action="store_true", help="do not POST")
     io_.add_argument("--spool-dir", default=DEFAULT_SPOOL)
     io_.add_argument("--no-spool", action="store_true", help="do not spool failed uploads")
+    io_.add_argument("--resend", action="store_true",
+                     help="resend spooled envelopes and exit without collecting anything new "
+                          "(exit status 1 if any remain spooled)")
     return p.parse_args(argv)
 
 
@@ -762,8 +774,15 @@ def main(argv=None):
     args.tz = args.tz or cfg.get("timezone") or os.environ.get("TZ")
     if args.all:
         args.jobs = args.nodes = args.fairshare = True
+    if args.resend:
+        if args.jobs or args.nodes or args.fairshare:
+            die("--resend drains the spool only; do not combine it with --jobs/--nodes/--fairshare/--all")
+        if not args.url or not args.token:
+            die("url and token are required to resend")
+        _, failed = spool_resend(args.spool_dir, args.url, args.token)
+        sys.exit(1 if failed else 0)
     if not (args.jobs or args.nodes or args.fairshare):
-        die("nothing selected: use --jobs, --nodes, --fairshare or --all")
+        die("nothing selected: use --jobs, --nodes, --fairshare, --all or --resend")
     if not args.cluster:
         die("--cluster (or cluster= in config) is required")
     if args.input and sum([args.jobs, args.nodes, args.fairshare]) != 1:

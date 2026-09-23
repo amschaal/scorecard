@@ -257,5 +257,58 @@ class EndToEnd(unittest.TestCase):
             self.assertEqual(len(env["rows"]), 3)
 
 
+class Spool(unittest.TestCase):
+    def _spool(self, tmp, names):
+        for n in names:
+            with open(os.path.join(tmp, n), "wb") as fh:
+                fh.write(b"payload-" + n.encode())
+
+    def test_resend_deletes_only_successes(self):
+        calls = []
+
+        def fake_post(url, token, kind, payload, retries=3, timeout=600):
+            calls.append((kind, payload, retries))
+            return kind != "nodes"
+
+        orig = sc.post_envelope
+        sc.post_envelope = fake_post
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                self._spool(tmp, ["jobs-hive-20260914T0000-1.json.gz", "nodes-hive-20260915T0215-2.json.gz",
+                                  "notes.txt"])
+                self.assertEqual(sc.spool_resend(tmp, "http://x", "t"), (1, 1))
+                self.assertEqual(sorted(os.listdir(tmp)), ["nodes-hive-20260915T0215-2.json.gz", "notes.txt"])
+        finally:
+            sc.post_envelope = orig
+        self.assertEqual([(c[0], c[2]) for c in calls], [("jobs", 1), ("nodes", 1)])
+        self.assertEqual(calls[0][1], b"payload-jobs-hive-20260914T0000-1.json.gz")
+
+    def test_resend_missing_dir(self):
+        self.assertEqual(sc.spool_resend("/nonexistent/spool", "http://x", "t"), (0, 0))
+
+    def test_resend_flag_collects_nothing(self):
+        posted, ran = [], []
+        orig_post, orig_run = sc.post_envelope, sc.run_lines
+        sc.post_envelope = lambda url, token, kind, payload, retries=3, timeout=600: posted.append(kind) or True
+        sc.run_lines = lambda cmd: ran.append(cmd) or []
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                self._spool(tmp, ["fairshare-hive-20260915T0215-3.json.gz"])
+                with self.assertRaises(SystemExit) as cm:
+                    sc.main(["--cluster", "hive", "--url", "http://x", "--token", "t", "--resend",
+                             "--spool-dir", tmp])
+                self.assertEqual(cm.exception.code, 0)
+                self.assertEqual(os.listdir(tmp), [])
+        finally:
+            sc.post_envelope, sc.run_lines = orig_post, orig_run
+        self.assertEqual(posted, ["fairshare"])
+        self.assertEqual(ran, [])
+
+    def test_resend_flag_rejects_kinds(self):
+        with self.assertRaises(SystemExit) as cm:
+            sc.main(["--cluster", "hive", "--url", "http://x", "--token", "t", "--resend", "--jobs"])
+        self.assertEqual(cm.exception.code, 2)
+
+
 if __name__ == "__main__":
     unittest.main()
