@@ -47,6 +47,22 @@ succeed, and exits 1 if any remain. Job envelopes are upserts and safe to
 resend; node and fairshare envelopes insert a snapshot at their recorded time,
 so resend those only if that snapshot is missing.
 
+An envelope that failed because the backend took too long (App Runner cuts
+requests off at 120 s and returns 502, even though the ingest usually finishes
+on the server) will fail the same way every time it is resent whole. Send it in
+pieces instead:
+
+```
+python3 slurm_collector.py --resend --split-rows 10000
+```
+
+A spooled jobs envelope with more rows than that is posted as several envelopes
+of at most that many rows, sorted by end time, all carrying the original window.
+Parts that land are dropped from the spool file as they go, so an interrupted
+run resumes with only the outstanding rows. Before resending, check the admin
+ingest page: a window that already shows an `ok` batch has landed and its spool
+file can simply be deleted.
+
 ## Tests
 
 ```

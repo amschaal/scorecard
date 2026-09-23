@@ -642,9 +642,13 @@ def spool_write(spool_dir, kind, cluster, payload, tag):
     return path
 
 
-def spool_resend(spool_dir, url, token):
+def spool_resend(spool_dir, url, token, split_rows=0):
     """Re-POST every spooled envelope, oldest first; delete the ones that succeed.
-    Returns (sent, failed)."""
+
+    With split_rows > 0, a jobs envelope with more rows than that is sent as several smaller
+    envelopes (same window, same taken_at) so each request finishes inside the backend's request
+    timeout. Delivered parts are dropped from the spool file as they go, so a later run resumes
+    with only the rows that are still outstanding. Returns (sent, failed) counted in files."""
     sent = failed = 0
     if not os.path.isdir(spool_dir):
         return sent, failed
@@ -655,8 +659,12 @@ def spool_resend(spool_dir, url, token):
         path = os.path.join(spool_dir, name)
         with open(path, "rb") as fh:
             payload = fh.read()
-        log("resending spooled %s" % name)
-        if post_envelope(url, token, kind, payload, retries=1):
+        if kind == "jobs" and split_rows > 0:
+            ok = _resend_split(path, name, payload, url, token, split_rows)
+        else:
+            log("resending spooled %s" % name)
+            ok = post_envelope(url, token, kind, payload, retries=1)
+        if ok:
             os.remove(path)
             sent += 1
         else:
@@ -664,6 +672,28 @@ def spool_resend(spool_dir, url, token):
     if sent or failed:
         log("spool: %d resent, %d still spooled" % (sent, failed))
     return sent, failed
+
+
+def _resend_split(path, name, payload, url, token, split_rows):
+    with gzip.GzipFile(fileobj=io.BytesIO(payload)) as gz:
+        env = json.loads(gz.read().decode("utf-8"))
+    rows = env.get("rows") or []
+    if len(rows) <= split_rows:
+        log("resending spooled %s" % name)
+        return post_envelope(url, token, "jobs", payload, retries=1)
+    rows.sort(key=lambda r: r.get("end") or "")
+    parts = [rows[i:i + split_rows] for i in range(0, len(rows), split_rows)]
+    for i, part in enumerate(parts, 1):
+        log("resending spooled %s part %d/%d (%d rows)" % (name, i, len(parts), len(part)))
+        if not post_envelope(url, token, "jobs", envelope_bytes(dict(env, rows=part)), retries=1):
+            remaining = [r for p in parts[i - 1:] for r in p]
+            tmp = path + ".tmp"
+            with open(tmp, "wb") as fh:
+                fh.write(envelope_bytes(dict(env, rows=remaining)))
+            os.replace(tmp, path)
+            log("kept %d undelivered rows in %s" % (len(remaining), name))
+            return False
+    return True
 
 
 def deliver(env, kind, args, tag):
@@ -762,6 +792,9 @@ def parse_args(argv=None):
     io_.add_argument("--resend", action="store_true",
                      help="resend spooled envelopes and exit without collecting anything new "
                           "(exit status 1 if any remain spooled)")
+    io_.add_argument("--split-rows", type=int, default=0, metavar="N",
+                     help="when resending, post a spooled jobs envelope with more than N rows as several "
+                          "envelopes of at most N rows each (default: send whole)")
     return p.parse_args(argv)
 
 
@@ -779,7 +812,7 @@ def main(argv=None):
             die("--resend drains the spool only; do not combine it with --jobs/--nodes/--fairshare/--all")
         if not args.url or not args.token:
             die("url and token are required to resend")
-        _, failed = spool_resend(args.spool_dir, args.url, args.token)
+        _, failed = spool_resend(args.spool_dir, args.url, args.token, args.split_rows)
         sys.exit(1 if failed else 0)
     if not (args.jobs or args.nodes or args.fairshare):
         die("nothing selected: use --jobs, --nodes, --fairshare, --all or --resend")
@@ -794,7 +827,7 @@ def main(argv=None):
     tz_name = args.tz or time.strftime("%Z")
 
     if not args.dry_run and args.url and args.token and not args.no_spool:
-        spool_resend(args.spool_dir, args.url, args.token)
+        spool_resend(args.spool_dir, args.url, args.token, args.split_rows)
 
     ver = None if args.input else slurm_version()
     taken_at = parse_iso_arg(args.taken_at) if args.taken_at else dt.datetime.now().astimezone()

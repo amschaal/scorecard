@@ -4,6 +4,7 @@
 """
 import datetime as dt
 import gzip
+import io
 import json
 import os
 import sys
@@ -282,6 +283,66 @@ class Spool(unittest.TestCase):
             sc.post_envelope = orig
         self.assertEqual([(c[0], c[2]) for c in calls], [("jobs", 1), ("nodes", 1)])
         self.assertEqual(calls[0][1], b"payload-jobs-hive-20260914T0000-1.json.gz")
+
+    def _spool_jobs(self, tmp, name, n):
+        rows = [{"job_id_raw": str(i), "end": "2026-08-27T%02d:00:00-07:00" % (i % 24)} for i in range(n)]
+        rows.reverse()  # unsorted on purpose
+        env = sc.make_envelope("hive", "jobs", rows, "America/Los_Angeles")
+        with open(os.path.join(tmp, name), "wb") as fh:
+            fh.write(sc.envelope_bytes(env))
+
+    @staticmethod
+    def _rows(payload):
+        with gzip.GzipFile(fileobj=io.BytesIO(payload)) as gz:
+            return json.loads(gz.read().decode())["rows"]
+
+    def test_resend_split_posts_parts_sorted_by_end(self):
+        calls = []
+        orig = sc.post_envelope
+        sc.post_envelope = lambda url, token, kind, payload, retries=3, timeout=600: calls.append(
+            (kind, self._rows(payload))) or True
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                self._spool_jobs(tmp, "jobs-hive-20260827T1200-1.json.gz", 25)
+                self._spool_jobs(tmp, "jobs-hive-20260828T1200-2.json.gz", 5)  # under the limit: sent whole
+                self.assertEqual(sc.spool_resend(tmp, "http://x", "t", split_rows=10), (2, 0))
+                self.assertEqual(os.listdir(tmp), [])
+        finally:
+            sc.post_envelope = orig
+        self.assertEqual([len(r) for _, r in calls], [10, 10, 5, 5])
+        ends = [r["end"] for _, rows in calls[:3] for r in rows]
+        self.assertEqual(ends, sorted(ends))
+        self.assertEqual(sorted(r["job_id_raw"] for _, rows in calls[:3] for r in rows),
+                         sorted(str(i) for i in range(25)))
+
+    def test_resend_split_keeps_undelivered_rows(self):
+        calls, total = [], [0]
+
+        def fake_post(url, token, kind, payload, retries=3, timeout=600):
+            calls.append(self._rows(payload))
+            total[0] += 1
+            return total[0] != 2  # the second post ever fails; everything after succeeds
+
+        orig = sc.post_envelope
+        sc.post_envelope = fake_post
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                name = "jobs-hive-20260827T1200-1.json.gz"
+                self._spool_jobs(tmp, name, 25)
+                self.assertEqual(sc.spool_resend(tmp, "http://x", "t", split_rows=10), (0, 1))
+                self.assertEqual(os.listdir(tmp), [name])
+                with open(os.path.join(tmp, name), "rb") as fh:
+                    left = self._rows(fh.read())
+                self.assertEqual(len(left), 15)
+                left_ids = {r["job_id_raw"] for r in left}
+                self.assertTrue({r["job_id_raw"] for r in calls[1]} <= left_ids)   # the failed part
+                self.assertTrue(left_ids.isdisjoint(r["job_id_raw"] for r in calls[0]))  # the delivered one
+                # A second run resumes with only the outstanding rows.
+                calls.clear()
+                self.assertEqual(sc.spool_resend(tmp, "http://x", "t", split_rows=10), (1, 0))
+                self.assertEqual([len(p) for p in calls], [10, 5])
+        finally:
+            sc.post_envelope = orig
 
     def test_resend_missing_dir(self):
         self.assertEqual(sc.spool_resend("/nonexistent/spool", "http://x", "t"), (0, 0))
