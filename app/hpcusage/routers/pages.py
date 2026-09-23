@@ -74,7 +74,7 @@ def user_page(request: Request, username: str, cluster: Cluster = Depends(get_cl
     start, end = parse_window(from_, to)
     c["summary"] = usage_q.summary(db, cluster.id, start, end, user=username)
     c["accounts"] = usage_q.top_entities(db, cluster.id, start, end, "account", user=username)
-    c["jobs"] = jobs_q.list_jobs(db, cluster.id, start, end, user=username, limit=50)
+    c["jobs"] = jobs_q.list_jobs(db, cluster.id, start, end, user=username, limit=50, count=False)
     return templates.TemplateResponse(request, "entity.html", c)
 
 
@@ -86,7 +86,7 @@ def account_page(request: Request, account: str, cluster: Cluster = Depends(get_
     start, end = parse_window(from_, to)
     c["summary"] = usage_q.summary(db, cluster.id, start, end, account=account)
     c["members"] = usage_q.top_entities(db, cluster.id, start, end, "user_name", limit=25, account=account)
-    c["jobs"] = jobs_q.list_jobs(db, cluster.id, start, end, account=account, limit=50)
+    c["jobs"] = jobs_q.list_jobs(db, cluster.id, start, end, account=account, limit=50, count=False)
     return templates.TemplateResponse(request, "entity.html", c)
 
 
@@ -98,7 +98,7 @@ def partition_page(request: Request, partition: str, cluster: Cluster = Depends(
     start, end = parse_window(from_, to)
     c["summary"] = usage_q.summary(db, cluster.id, start, end, partition=partition)
     c["members"] = usage_q.top_entities(db, cluster.id, start, end, "user_name", limit=25, partition=partition)
-    c["jobs"] = jobs_q.list_jobs(db, cluster.id, start, end, partition=partition, limit=50)
+    c["jobs"] = jobs_q.list_jobs(db, cluster.id, start, end, partition=partition, limit=50, count=False)
     return templates.TemplateResponse(request, "entity.html", c)
 
 

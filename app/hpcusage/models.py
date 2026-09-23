@@ -5,7 +5,7 @@ from datetime import date, datetime
 
 from sqlalchemy import (
     ARRAY, BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Index, Integer, Numeric,
-    String, Text, UniqueConstraint, func,
+    String, Text, UniqueConstraint, func, text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -103,6 +103,11 @@ class Job(Base):
         Index("ix_jobs_cluster_user_end_day", "cluster_id", "user_name", "end_day"),
         Index("ix_jobs_cluster_account_end_day", "cluster_id", "account", "end_day"),
         Index("ix_jobs_cluster_partition_end_day", "cluster_id", "partition", "end_day"),
+        # "Which jobs were running on day D" for the utilization rollup (see ingest/rollup.py).
+        # Partial: rows with no or inconsistent start never count, and tstzrange() would reject
+        # start > end. Expression indexes are compared by name in tests/test_migrations.py.
+        Index("ix_jobs_active_range", text("tstzrange(start_time, end_time)"), postgresql_using="gist",
+              postgresql_where=text("start_time IS NOT NULL AND start_time <= end_time")),
     )
 
 

@@ -56,7 +56,7 @@ def ingest_envelope(db: Session, env: Envelope, settings: Settings) -> dict:
         if env.kind == "jobs":
             rows = [JobRow.model_validate(r) for r in env.rows]
             records = [upsert.job_row_to_record(r, cluster.id, tz, batch.id) for r in rows]
-            inserted, updated, end_days, min_start, max_end = upsert.upsert_jobs(
+            inserted, updated, unchanged, end_days, min_start, max_end = upsert.upsert_jobs(
                 db, records, settings.upsert_batch_size
             )
             usage_rows = rollup.recompute_daily_usage(db, cluster.id, end_days)
@@ -64,7 +64,8 @@ def ingest_envelope(db: Session, env: Envelope, settings: Settings) -> dict:
             util_rows = rollup.recompute_partition_util(db, cluster.id, cluster.timezone, util_days)
             purged = retention.purge_old_jobs(db, cluster.id, settings.job_retention_days)
             batch.rows_inserted, batch.rows_updated = inserted, updated
-            result.update(inserted=inserted, updated=updated, rollup_days=sorted(str(d) for d in end_days),
+            result.update(inserted=inserted, updated=updated, unchanged=unchanged,
+                          rollup_days=sorted(str(d) for d in end_days),
                           util_days=len(util_days), daily_usage_rows=usage_rows,
                           partition_util_rows=util_rows, purged_jobs=purged)
         elif env.kind == "nodes":

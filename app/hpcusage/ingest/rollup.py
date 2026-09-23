@@ -69,9 +69,13 @@ WITH days AS (
     JOIN jobs j
       ON j.cluster_id = :cid
      AND j.start_time IS NOT NULL
+     AND j.start_time <= j.end_time
      AND j.elapsed_s > 0
-     AND j.start_time < b.d1
-     AND j.end_time > b.d0
+     -- "job ran during this day": [start, end) overlaps [d0, d1). Written as a range overlap so
+     -- the partial GiST index ix_jobs_active_range answers it; the two btree inequalities it
+     -- replaces (start < d1 AND end > d0) could only use an index for one side and degraded to
+     -- a scan of every job in the retention window per recomputed day.
+     AND tstzrange(j.start_time, j.end_time) && tstzrange(b.d0, b.d1)
 ), usage AS (
     SELECT day, partition,
            sum(secs * alloc_cpus) AS cpu_seconds,

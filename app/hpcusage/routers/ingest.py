@@ -6,6 +6,7 @@ import zlib
 
 import orjson
 from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.concurrency import run_in_threadpool
 from pydantic import ValidationError
 from sqlalchemy.orm import Session
 
@@ -29,9 +30,8 @@ def cluster_for_token(request: Request, settings: Settings = Depends(get_setting
     raise HTTPException(403, "invalid token")
 
 
-async def read_envelope(request: Request, settings: Settings) -> Envelope:
-    raw = await request.body()
-    if request.headers.get("content-encoding", "").lower() == "gzip":
+def parse_envelope(raw: bytes, content_encoding: str, settings: Settings) -> Envelope:
+    if content_encoding.lower() == "gzip":
         d = zlib.decompressobj(16 + zlib.MAX_WBITS)
         raw = d.decompress(raw, settings.max_ingest_bytes + 1)
         if d.unconsumed_tail:
@@ -48,10 +48,9 @@ async def read_envelope(request: Request, settings: Settings) -> Envelope:
         raise HTTPException(422, f"invalid envelope: {e.errors()[:3]}") from e
 
 
-@router.post("/{kind}")
-async def ingest(kind: str, request: Request, token_cluster: str = Depends(cluster_for_token),
-                 db: Session = Depends(get_db), settings: Settings = Depends(get_settings)):
-    env = await read_envelope(request, settings)
+def _ingest_sync(kind: str, raw: bytes, content_encoding: str, token_cluster: str, db: Session,
+                 settings: Settings) -> dict:
+    env = parse_envelope(raw, content_encoding, settings)
     if env.kind != kind:
         raise HTTPException(400, f"envelope kind {env.kind!r} does not match URL {kind!r}")
     if env.cluster != token_cluster:
@@ -63,3 +62,13 @@ async def ingest(kind: str, request: Request, token_cluster: str = Depends(clust
     log.info("ingest %s/%s: %s", env.cluster, env.kind, {k: v for k, v in result.items() if k != "rollup_days"})
     return result
 
+
+@router.post("/{kind}")
+async def ingest(kind: str, request: Request, token_cluster: str = Depends(cluster_for_token),
+                 db: Session = Depends(get_db), settings: Settings = Depends(get_settings)):
+    # Only the body read is async. Decompression, validation and the whole ingest transaction are
+    # CPU- and DB-bound, so they run on the worker threadpool instead of blocking the event loop
+    # (which would stall every page and API request served by this worker for the whole ingest).
+    raw = await request.body()
+    return await run_in_threadpool(_ingest_sync, kind, raw, request.headers.get("content-encoding", ""),
+                                   token_cluster, db, settings)

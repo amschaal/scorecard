@@ -12,7 +12,9 @@ def list_jobs(db: Session, cluster_id: int, start: date, end: date, user: str | 
               account: str | None = None, partition: str | None = None, state: str | None = None,
               qos: str | None = None, job_id: str | None = None, min_cpus: int | None = None,
               gpus_only: bool = False, sort: str = "end_time", desc: bool = True,
-              limit: int = 100, offset: int = 0) -> dict:
+              limit: int = 100, offset: int = 0, count: bool = True) -> dict:
+    """List matching jobs. `count=False` skips the total (a second scan of every matching row);
+    pages that only show "the latest N" do not need it and the API reports total=None."""
     clauses, params = [], {"cid": cluster_id, "start": start, "end": end}
     for col, val in (("user_name", user), ("account", account), ("partition", partition),
                      ("state", state), ("qos", qos)):
@@ -30,9 +32,16 @@ def list_jobs(db: Session, cluster_id: int, start: date, end: date, user: str | 
     where = " ".join(clauses)
     if sort not in SORTABLE:
         sort = "end_time"
-    order = f"{sort} {'DESC' if desc else 'ASC'} NULLS LAST"
+    direction = "DESC" if desc else "ASC"
+    if sort == "end_time":
+        # Lead with end_day: the (cluster, <filter column>, end_day) btree indexes deliver rows
+        # already ordered by it, so Postgres can incremental-sort within each day and stop after
+        # LIMIT rows instead of sorting every job the user/account ran in the window.
+        order = f"end_day {direction}, end_time {direction}"
+    else:
+        order = f"{sort} {direction} NULLS LAST"
     base = f"FROM jobs WHERE cluster_id = :cid AND end_day >= :start AND end_day < :end {where}"
-    total = db.execute(text(f"SELECT count(*) {base}"), params).scalar()
+    total = db.execute(text(f"SELECT count(*) {base}"), params).scalar() if count else None
     rows = db.execute(text(f"""
         SELECT job_id, job_id_raw, user_name, account, partition, qos, job_name, state, exit_code,
                submit_time, start_time, end_time, elapsed_s, timelimit_s, wait_s, alloc_cpus, nnodes,
@@ -51,7 +60,7 @@ def list_jobs(db: Session, cluster_id: int, start: date, end: date, user: str | 
         for k in ("submit_time", "start_time", "end_time"):
             d[k] = d[k].isoformat() if d[k] else None
         items.append(d)
-    return {"total": int(total or 0), "limit": limit, "offset": offset, "items": items}
+    return {"total": int(total or 0) if count else None, "limit": limit, "offset": offset, "items": items}
 
 
 def distinct_values(db: Session, cluster_id: int, col: str) -> list[str]:

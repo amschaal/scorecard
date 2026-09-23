@@ -64,10 +64,21 @@ def test_jobs_ingest_upsert_and_rollup(client, clean_db):
         batch = conn.execute(text("SELECT status, rows_received, rows_inserted FROM ingest_batches")).one()
         assert batch.status == "ok" and batch.rows_received == 5 and batch.rows_inserted == 5
 
-    # Re-posting is idempotent: everything updates, nothing duplicates.
+    # Re-posting is idempotent: identical rows are left untouched, nothing duplicates.
     r = post_envelope(client, env)
     assert r.status_code == 200
-    assert r.json()["inserted"] == 0 and r.json()["updated"] == 5
+    body = r.json()
+    assert body["inserted"] == 0 and body["updated"] == 0 and body["unchanged"] == 5
+    with clean_db.connect() as conn:
+        assert conn.execute(text("SELECT count(*) FROM jobs")).scalar() == 5
+        assert conn.execute(text("SELECT count(*) FROM daily_usage")).scalar() == 5
+
+    # A changed row is rewritten.
+    env["rows"][0]["state"] = "FAILED"
+    r = post_envelope(client, env)
+    assert r.status_code == 200
+    body = r.json()
+    assert body["inserted"] == 0 and body["updated"] == 1 and body["unchanged"] == 4
     with clean_db.connect() as conn:
         assert conn.execute(text("SELECT count(*) FROM jobs")).scalar() == 5
         assert conn.execute(text("SELECT count(*) FROM daily_usage")).scalar() == 5
