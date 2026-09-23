@@ -49,22 +49,25 @@ def fairshare_series(db: Session, cluster_id: int, start: date, end: date, accou
     }
 
 
+def _capacity_bucket() -> dict:
+    return {"nodes": 0, "cpus_total": 0, "cpus_alloc": 0, "gpus_total": 0, "gpus_alloc": 0,
+            "mem_mb_total": 0, "mem_mb_alloc": 0, "down": 0}
+
+
 def nodes_latest(db: Session, cluster_id: int) -> dict:
     taken = db.execute(text("SELECT max(taken_at) FROM node_snapshots WHERE cluster_id = :cid"),
                        {"cid": cluster_id}).scalar()
     if taken is None:
-        return {"taken_at": None, "nodes": [], "by_state": {}, "by_partition": [], "totals": {}}
+        # Same shape as a real snapshot: the page and API consumers read totals unconditionally.
+        return {"taken_at": None, "nodes": [], "by_state": {}, "by_partition": [], "totals": _capacity_bucket()}
     rows = db.execute(text("""
         SELECT node_name, state, cpus_total, cpus_alloc, mem_mb_total, mem_mb_alloc, gpus_total, gpus_alloc,
                gpu_type, partitions, features
         FROM node_snapshots WHERE cluster_id = :cid AND taken_at = :taken ORDER BY node_name
     """), {"cid": cluster_id, "taken": taken}).mappings().all()
     by_state: dict[str, int] = defaultdict(int)
-    by_part: dict[str, dict] = defaultdict(lambda: {"nodes": 0, "cpus_total": 0, "cpus_alloc": 0,
-                                                    "gpus_total": 0, "gpus_alloc": 0, "mem_mb_total": 0,
-                                                    "mem_mb_alloc": 0, "down": 0})
-    totals = {"nodes": 0, "cpus_total": 0, "cpus_alloc": 0, "gpus_total": 0, "gpus_alloc": 0,
-              "mem_mb_total": 0, "mem_mb_alloc": 0, "down": 0}
+    by_part: dict[str, dict] = defaultdict(_capacity_bucket)
+    totals = _capacity_bucket()
     nodes = []
     for r in rows:
         d = dict(r)

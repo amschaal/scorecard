@@ -79,5 +79,15 @@ def test_pages_render(seeded, path):
     assert "<html" in r.text.lower()
 
 
+def test_nodes_page_before_first_snapshot(client):
+    # Clusters named in CLUSTERS exist from startup, so /c/hive/nodes is reachable before the
+    # collector has posted a nodes envelope; it must render (with zero totals), not 500.
+    r = client.get("/c/hive/nodes")
+    assert r.status_code == 200, f"{r.status_code} {r.text[:300]}"
+    assert "No node snapshot yet" in r.text and "no node snapshot yet" in r.text
+    latest = client.get("/api/v1/nodes/latest", params={"cluster": "hive"}).json()
+    assert latest["taken_at"] is None and latest["totals"]["nodes"] == 0
+
+
 def test_healthz(client):
     assert client.get("/healthz").json()["status"] == "ok"

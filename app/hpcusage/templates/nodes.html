@@ -2,7 +2,7 @@
 {% from "_macros.html" import tile %}
 {% block title %}Nodes · {{ cluster.display_name }}{% endblock %}
 {% block head %}
-<div class="page-head"><h1>Nodes</h1><span class="sub">{{ cluster.display_name }} · snapshot {{ nodes.taken_at|ts }}</span></div>
+<div class="page-head"><h1>Nodes</h1><span class="sub">{{ cluster.display_name }} · {{ 'snapshot ' ~ (nodes.taken_at|ts) if nodes.taken_at else 'no node snapshot yet' }}</span></div>
 {% endblock %}
 {% block content %}
 {% set t = nodes.totals %}
